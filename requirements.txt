@@ -3,6 +3,13 @@ pandas
 scikit-learn
 matplotlib
 tensorflow
-torch
-transformers
+torch>=2.0.0
+transformers>=4.36.0
 requests
+datasets>=2.16.0
+peft>=0.7.0
+trl>=0.7.0
+accelerate>=0.25.0  # Required for transformers
+bitsandbytes>=0.41.0  # Required for 8-bit training
+wandb  # Required for logging
+flash-attn==2.3.6
