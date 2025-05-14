@@ -150,6 +150,7 @@ model = AutoModelForCausalLM.from_pretrained(
 
 tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL_NAME)
 tokenizer.pad_token = '<|endoftext|>'
+tokenizer.eos_token_id = 151643
 
 # use peft at your own risk; not working for me with multi-GPU training
 trainer = GRPOTrainer(
