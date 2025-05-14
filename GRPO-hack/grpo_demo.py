@@ -27,8 +27,7 @@ XML_COT_FORMAT = """\
 </reasoning>
 <answer>
 {answer}
-</answer>
-"""
+</answer><|endoftext|>"""
 
 def extract_xml_answer(text: str) -> str:
     answer = text.split("<answer>")[-1]
@@ -45,12 +44,17 @@ def get_gsm8k_questions(split = "train") -> Dataset:
     data = load_dataset('openai/gsm8k', 'main')[split] # type: ignore
     data = data.map(lambda x: { # type: ignore
         'prompt': [
-            {'role': 'system', 'content': SYSTEM_PROMPT},
-            #{'role': 'user', 'content': 'What is the largest single-digit prime number?'},
-            #{'role': 'assistant', 'content': XML_COT_FORMAT.format(
-            #    reasoning="9 is divisble by 3 and 8 is divisible by 2, but 7 is prime.",
-            #    answer="7"
-            #)},
+            # {'role': 'system', 'content': SYSTEM_PROMPT},
+            {'role': 'user', 'content': 'What is the largest single-digit prime number?'},
+            {'role': 'assistant', 'content': XML_COT_FORMAT.format(
+               reasoning="9 is divisble by 3 and 8 is divisible by 2, but 7 is prime.",
+               answer="7"
+            )},
+            {'role': 'user', 'content': 'Sam, Sid, and Steve brought popsicle sticks for their group activity in their Art class. Sam has thrice as many as Sid, and Sid has twice as many as Steve. If Steve has 12 popsicle sticks, how many popsicle sticks can they use for their Art class activity?'},
+            {'role': 'assistant', 'content': XML_COT_FORMAT.format(
+               reasoning="To determine the total number of popsicle sticks Sam, Sid, and Steve can use for their Art class activity, we can use the following steps:\n1. Let's denote the number of popsicle sticks that Steve has as \\( S \\).\n2. According to the problem, \\( S = 12 \\).\n3. Since Sid has twice as many popsicle sticks as Steve, we can calculate the number of popsicle sticks that Sid has as \\( S \times 2 = 12 \times 2 = 24 \\).\n4. Sam has thrice as many popsicle sticks as Sid, so we calculate the number of popsicle sticks that Sam has as \\( 3 \times 24 = 72 \\).\n5. The total number of popsicle sticks they can use is the sum of the popsicle sticks that Sam, Sid, and Steve have: \\( S + Sid + Sam = 12 + 24 + 72 = 108 \\).\nTherefore, the total number of popsicle sticks they can use for their Art class activity is \\( \x08oxed{108} \\).",
+               answer="108"
+            )},
             {'role': 'user', 'content': x['question']}
         ],
         'answer': extract_hash_answer(x['answer'])
