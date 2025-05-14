@@ -122,7 +122,7 @@ training_args = GRPOConfig(
     per_device_train_batch_size=1,
     gradient_accumulation_steps=8,
     num_generations=8,
-    max_prompt_length=256,
+    max_prompt_length=768,
     max_completion_length=512,
     num_train_epochs=1,
     save_steps=100,
@@ -149,7 +149,7 @@ model = AutoModelForCausalLM.from_pretrained(
 ).to('cuda')
 
 tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL_NAME)
-tokenizer.pad_token = tokenizer.eos_token
+tokenizer.pad_token = '<|endoftext|>'
 
 # use peft at your own risk; not working for me with multi-GPU training
 trainer = GRPOTrainer(
@@ -163,6 +163,6 @@ trainer = GRPOTrainer(
         correctness_reward_func],
     args=training_args,
     train_dataset=dataset,
-    peft_config=peft_config
+    # peft_config=peft_config
 )
 trainer.train()
