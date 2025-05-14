@@ -104,19 +104,9 @@ def xmlcount_reward_func(completions, **kwargs) -> list[float]:
     contents = [completion[0]["content"] for completion in completions]
     return [count_xml(c) for c in contents]
 
-#model_name = "meta-llama/Llama-3.2-1B-Instruct"
-model_name = "Qwen/Qwen2.5-1.5B-Instruct"
-
-if "Llama" in model_name:
-    output_dir = "outputs/Llama-1B-GRPO"
-    run_name = "Llama-1B-GRPO-gsm8k"
-else:
-    output_dir="outputs/Qwen-1.5B-GRPO"
-    run_name="Qwen-1.5B-GRPO-gsm8k"
-    
 training_args = GRPOConfig(
-    output_dir=output_dir,
-    run_name=run_name,
+    output_dir="/root/arc",
+    run_name="test-run-2",
     learning_rate=5e-6,
     adam_beta1 = 0.9,
     adam_beta2 = 0.99,
@@ -126,16 +116,17 @@ training_args = GRPOConfig(
     logging_steps=1,
     bf16=True,
     per_device_train_batch_size=1,
-    gradient_accumulation_steps=4,
-    num_generations=16,
+    gradient_accumulation_steps=8,
+    num_generations=8,
     max_prompt_length=256,
-    max_completion_length=786,
+    max_completion_length=512,
     num_train_epochs=1,
     save_steps=100,
     max_grad_norm=0.1,
     report_to="wandb",
     log_on_each_node=False,
 )
+
 peft_config = LoraConfig(
     r=16,
     lora_alpha=64,
@@ -143,14 +134,17 @@ peft_config = LoraConfig(
     task_type="CAUSAL_LM",
     lora_dropout=0.05,
 )
+
+BASE_MODEL_NAME = "Qwen/Qwen3-0.6B-Base"
+
+# load the tokenizer and the model
 model = AutoModelForCausalLM.from_pretrained(
-    model_name,
-    torch_dtype=torch.bfloat16,
-    attn_implementation="flash_attention_2",
-    device_map=None
-).to("cuda")
-        
-tokenizer = AutoTokenizer.from_pretrained(model_name)
+    BASE_MODEL_NAME,
+    torch_dtype="auto",
+    device_map="auto"
+).to('cuda')
+
+tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL_NAME)
 tokenizer.pad_token = tokenizer.eos_token
 
 # use peft at your own risk; not working for me with multi-GPU training
@@ -165,6 +159,6 @@ trainer = GRPOTrainer(
         correctness_reward_func],
     args=training_args,
     train_dataset=dataset,
-    #peft_config=peft_config
+    peft_config=peft_config
 )
 trainer.train()
