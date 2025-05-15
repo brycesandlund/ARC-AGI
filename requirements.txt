@@ -13,3 +13,4 @@ accelerate>=0.25.0  # Required for transformers
 bitsandbytes>=0.41.0  # Required for 8-bit training
 wandb  # Required for logging
 flash-attn==2.3.6
+tf-keras
