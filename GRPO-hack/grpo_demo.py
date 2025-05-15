@@ -27,8 +27,7 @@ XML_COT_FORMAT = """\
 </reasoning>
 <answer>
 {answer}
-</answer>
-"""
+</answer><|endoftext|>"""
 
 def extract_xml_answer(text: str) -> str:
     answer = text.split("<answer>")[-1]
@@ -45,12 +44,17 @@ def get_gsm8k_questions(split = "train") -> Dataset:
     data = load_dataset('openai/gsm8k', 'main')[split] # type: ignore
     data = data.map(lambda x: { # type: ignore
         'prompt': [
-            {'role': 'system', 'content': SYSTEM_PROMPT},
-            #{'role': 'user', 'content': 'What is the largest single-digit prime number?'},
-            #{'role': 'assistant', 'content': XML_COT_FORMAT.format(
-            #    reasoning="9 is divisble by 3 and 8 is divisible by 2, but 7 is prime.",
-            #    answer="7"
-            #)},
+            # {'role': 'system', 'content': SYSTEM_PROMPT},
+            {'role': 'user', 'content': 'What is the largest single-digit prime number?'},
+            {'role': 'assistant', 'content': XML_COT_FORMAT.format(
+               reasoning="9 is divisble by 3 and 8 is divisible by 2, but 7 is prime.",
+               answer="7"
+            )},
+            {'role': 'user', 'content': 'Sam, Sid, and Steve brought popsicle sticks for their group activity in their Art class. Sam has thrice as many as Sid, and Sid has twice as many as Steve. If Steve has 12 popsicle sticks, how many popsicle sticks can they use for their Art class activity?'},
+            {'role': 'assistant', 'content': XML_COT_FORMAT.format(
+               reasoning="To determine the total number of popsicle sticks Sam, Sid, and Steve can use for their Art class activity, we can use the following steps:\n1. Let's denote the number of popsicle sticks that Steve has as \\( S \\).\n2. According to the problem, \\( S = 12 \\).\n3. Since Sid has twice as many popsicle sticks as Steve, we can calculate the number of popsicle sticks that Sid has as \\( S \times 2 = 12 \times 2 = 24 \\).\n4. Sam has thrice as many popsicle sticks as Sid, so we calculate the number of popsicle sticks that Sam has as \\( 3 \times 24 = 72 \\).\n5. The total number of popsicle sticks they can use is the sum of the popsicle sticks that Sam, Sid, and Steve have: \\( S + Sid + Sam = 12 + 24 + 72 = 108 \\).\nTherefore, the total number of popsicle sticks they can use for their Art class activity is \\( \x08oxed{108} \\).",
+               answer="108"
+            )},
             {'role': 'user', 'content': x['question']}
         ],
         'answer': extract_hash_answer(x['answer'])
@@ -104,19 +108,9 @@ def xmlcount_reward_func(completions, **kwargs) -> list[float]:
     contents = [completion[0]["content"] for completion in completions]
     return [count_xml(c) for c in contents]
 
-#model_name = "meta-llama/Llama-3.2-1B-Instruct"
-model_name = "Qwen/Qwen2.5-1.5B-Instruct"
-
-if "Llama" in model_name:
-    output_dir = "outputs/Llama-1B-GRPO"
-    run_name = "Llama-1B-GRPO-gsm8k"
-else:
-    output_dir="outputs/Qwen-1.5B-GRPO"
-    run_name="Qwen-1.5B-GRPO-gsm8k"
-    
 training_args = GRPOConfig(
-    output_dir=output_dir,
-    run_name=run_name,
+    output_dir="/root/arc",
+    run_name="test-run-2",
     learning_rate=5e-6,
     adam_beta1 = 0.9,
     adam_beta2 = 0.99,
@@ -126,16 +120,17 @@ training_args = GRPOConfig(
     logging_steps=1,
     bf16=True,
     per_device_train_batch_size=1,
-    gradient_accumulation_steps=4,
-    num_generations=16,
-    max_prompt_length=256,
-    max_completion_length=786,
+    gradient_accumulation_steps=8,
+    num_generations=8,
+    max_prompt_length=768,
+    max_completion_length=512,
     num_train_epochs=1,
     save_steps=100,
     max_grad_norm=0.1,
     report_to="wandb",
     log_on_each_node=False,
 )
+
 peft_config = LoraConfig(
     r=16,
     lora_alpha=64,
@@ -143,15 +138,19 @@ peft_config = LoraConfig(
     task_type="CAUSAL_LM",
     lora_dropout=0.05,
 )
+
+BASE_MODEL_NAME = "Qwen/Qwen3-0.6B-Base"
+
+# load the tokenizer and the model
 model = AutoModelForCausalLM.from_pretrained(
-    model_name,
-    torch_dtype=torch.bfloat16,
-    attn_implementation="flash_attention_2",
-    device_map=None
-).to("cuda")
-        
-tokenizer = AutoTokenizer.from_pretrained(model_name)
-tokenizer.pad_token = tokenizer.eos_token
+    BASE_MODEL_NAME,
+    torch_dtype="auto",
+    device_map="auto"
+).to('cuda')
+
+tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL_NAME)
+tokenizer.pad_token = '<|endoftext|>'
+tokenizer.eos_token_id = 151643
 
 # use peft at your own risk; not working for me with multi-GPU training
 trainer = GRPOTrainer(
@@ -165,6 +164,6 @@ trainer = GRPOTrainer(
         correctness_reward_func],
     args=training_args,
     train_dataset=dataset,
-    #peft_config=peft_config
+    # peft_config=peft_config
 )
 trainer.train()
