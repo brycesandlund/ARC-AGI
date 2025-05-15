@@ -12,6 +12,51 @@ from peft import LoraConfig
 from trl import GRPOConfig, GRPOTrainer
 
 
+def calculate_nonzero_match_percentage(answer_str, output_str):
+    """
+    Calculate the percentage of matching non-zero characters between answer and output strings.
+    Ignores all zeros and only considers matching of non-zero characters.
+    
+    Args:
+        answer_str (str): The reference answer string
+        output_str (str): The output string to compare against the answer
+        
+    Returns:
+        float: Percentage of matching non-zero characters (0-100)
+    """
+    # Remove any whitespace to focus only on actual characters
+    answer_clean = ''.join(answer_str.split())
+    output_clean = ''.join(output_str.split())
+    
+    # If either string is empty, return 0%
+    if not answer_clean or not output_clean:
+        return 0.0
+    
+    # Get lengths of both strings
+    answer_len = len(answer_clean)
+    output_len = len(output_clean)
+    
+    # Count total non-zero characters in answer
+    total_nonzero_in_answer = sum(1 for char in answer_clean if char != '0')
+    
+    # If there are no non-zero characters in answer, return 100% if output has none, 0% otherwise
+    if total_nonzero_in_answer == 0:
+        return 100.0 if all(char == '0' for char in output_clean) else 0.0
+    
+    # Count correct non-zero matches
+    correct_nonzero_matches = 0
+    min_len = min(answer_len, output_len)
+    
+    for i in range(min_len):
+        # Only count matches where the answer has a non-zero character
+        if answer_clean[i] != '0' and answer_clean[i] == output_clean[i]:
+            correct_nonzero_matches += 1
+    
+    # Calculate percentage based on the total non-zero characters in answer
+    percentage = (correct_nonzero_matches / total_nonzero_in_answer)
+    
+    return percentage
+
 def extract_xml_answer(text: str) -> str:
     answer = text.split("<answer>")[-1]
     answer = answer.split("</answer>")[0]
@@ -22,8 +67,18 @@ def correctness_reward_func(prompts, completions, answer, **kwargs) -> list[floa
     responses = [completion[0]['content'] for completion in completions]
     q = prompts[0][-1]['content']
     extracted_responses = [extract_xml_answer(r) for r in responses]
-    print(f"\nAnswer:\n{answer[0].strip()}", '*' * 20, f"\nResponse:\n{responses[0]}", '*' * 20, f"\nExtracted:\n{extracted_responses[0].strip()}")
-    return [2.0 if r.strip() == a.strip() else 0.0 for r, a in zip(extracted_responses, answer)]
+    print(
+        '*' * 20,
+        f"\nResponse:\n{responses[0]}\n\n", '*' * 20,
+        f"\nExtracted:\n{extracted_responses[0].strip()}",
+        f"\nAnswer:\n{answer[0].strip()}\n",
+        '\n',
+        '*' * 20,
+        calculate_nonzero_match_percentage(extracted_responses[0].strip(), answer[0].strip()),
+        '\n',
+        '*' * 20
+    )
+    return [2.0 * calculate_nonzero_match_percentage(r.strip(), a.strip()) for r, a in zip(extracted_responses, answer)]
 
 
 def soft_format_reward_func(completions, **kwargs) -> list[float]:
@@ -35,7 +90,7 @@ def soft_format_reward_func(completions, **kwargs) -> list[float]:
 
 training_args = GRPOConfig(
     output_dir="./",
-    run_name="test-run-mac",
+    run_name="test-run-arc",
     learning_rate=5e-6,
     adam_beta1 = 0.9,
     adam_beta2 = 0.99,
@@ -46,9 +101,9 @@ training_args = GRPOConfig(
     bf16=True,
     per_device_train_batch_size=1,
     gradient_accumulation_steps=8,
-    num_generations=2,
-    max_prompt_length=768,
-    max_completion_length=512,
+    num_generations=8,
+    max_prompt_length=4000,
+    max_completion_length=2000,
     num_train_epochs=1,
     save_steps=100,
     max_grad_norm=0.1,
@@ -71,7 +126,7 @@ model = AutoModelForCausalLM.from_pretrained(
     BASE_MODEL_NAME,
     torch_dtype="auto",
     device_map="auto"
-)
+).to('cuda')
 
 tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL_NAME)
 tokenizer.pad_token = '<|endoftext|>'
@@ -87,6 +142,6 @@ trainer = GRPOTrainer(
     ],
     args=training_args,
     train_dataset=dataset,
-    peft_config=peft_config
+    # peft_config=peft_config
 )
 trainer.train()
