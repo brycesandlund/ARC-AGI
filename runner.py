@@ -14,14 +14,12 @@ def analyze_array_dimensions(dataset):
     for split in dataset.keys():
         print(f"\nAnalyzing dimensions for split: {split}")
         split_data = dataset[split]
-        for group in split_data:
-            # group is a dict with a key like 'train' or 'test' whose value is a list of examples
-            for key in group:
-                for example in group[key]:
-                    input_shape = (len(example['input']), len(example['input'][0]))
-                    output_shape = (len(example['output']), len(example['output'][0]))
-                    input_dims[input_shape] += 1
-                    output_dims[output_shape] += 1
+        for example in split_data:
+            for input_grid, output_grid in zip(example['raw_train_inputs'], example['raw_train_outputs']):
+                input_shape = (len(input_grid), len(input_grid[0]) if input_grid else 0)
+                output_shape = (len(output_grid), len(output_grid[0]) if output_grid else 0)
+                input_dims[input_shape] += 1
+                output_dims[output_shape] += 1
     print("\nInput array dimensions:")
     for dim, count in sorted(input_dims.items()):
         print(f"{dim}: {count} examples")
@@ -32,7 +30,7 @@ def analyze_array_dimensions(dataset):
 def load_and_explore_dataset():
     # Load the dataset
     print("Loading dataset from Hugging Face...")
-    dataset = load_dataset("lordspline/arc-agi")
+    dataset = load_dataset("mertaylin/arc-agi-transduction100k")
     
     # Print dataset structure
     print("\nDataset Structure:")
@@ -40,19 +38,18 @@ def load_and_explore_dataset():
     
     for split in dataset.keys():
         print(f"\n--- Exploring split: {split} ---")
-        split_df = pd.DataFrame(dataset[split])
-        print(f"Number of examples: {len(split_df)}")
-        print(f"Columns: {split_df.columns.tolist()}")
-        print("First example:")
-        print(json.dumps(split_df.iloc[0].to_dict(), indent=2))
-        print("Data types:")
-        print(split_df.dtypes)
-        print("Missing values per column:")
-        print(split_df.isnull().sum())
-        for col in split_df.columns:
-            if split_df[col].dtype == 'object':
-                print(f"Value counts for {col}:")
-                print(split_df[col].value_counts().head())
+        split_data = dataset[split]
+        print(f"Number of examples: {len(split_data)}")
+        if len(split_data) > 0:
+            first_row = split_data[0]
+            print(f"Columns: {list(first_row.keys())}")
+            print("First example:")
+            print(json.dumps(first_row, indent=2))
+            print("Data types:")
+            for k, v in first_row.items():
+                print(f"  {k}: {type(v)}")
+        else:
+            print("No examples in this split.")
     
     # Analyze array dimensions
     analyze_array_dimensions(dataset)
@@ -61,32 +58,28 @@ def load_and_explore_dataset():
 
 def filter_puzzles_by_output_size(dataset, max_size=5):
     filtered_puzzles = []
-    
     for split in dataset.keys():
         split_data = dataset[split]
-        for group in split_data:
-            for key in group:
-                for example in group[key]:
-                    output_shape = (len(example['output']), len(example['output'][0]))
-                    if output_shape[0] <= max_size and output_shape[1] <= max_size:
-                        filtered_puzzles.append(example)
-    
+        for example in split_data:
+            for output_grid in example['raw_train_outputs']:
+                output_shape = (len(output_grid), len(output_grid[0]) if output_grid else 0)
+                if output_shape[0] <= max_size and output_shape[1] <= max_size:
+                    filtered_puzzles.append(example)
+                    break  # Only need one grid to match
     return filtered_puzzles
 
 def filter_puzzles_by_both_sizes(dataset, max_size=5):
     filtered_puzzles = []
-    
     for split in dataset.keys():
         split_data = dataset[split]
-        for group in split_data:
-            for key in group:
-                for example in group[key]:
-                    input_shape = (len(example['input']), len(example['input'][0]))
-                    output_shape = (len(example['output']), len(example['output'][0]))
-                    if (input_shape[0] <= max_size and input_shape[1] <= max_size and
-                        output_shape[0] <= max_size and output_shape[1] <= max_size):
-                        filtered_puzzles.append(example)
-    
+        for example in split_data:
+            for input_grid, output_grid in zip(example['raw_train_inputs'], example['raw_train_outputs']):
+                input_shape = (len(input_grid), len(input_grid[0]) if input_grid else 0)
+                output_shape = (len(output_grid), len(output_grid[0]) if output_grid else 0)
+                if (input_shape[0] <= max_size and input_shape[1] <= max_size and
+                    output_shape[0] <= max_size and output_shape[1] <= max_size):
+                    filtered_puzzles.append(example)
+                    break
     return filtered_puzzles
 
 def create_new_dataset(filtered_puzzles, test_size=0.2, random_state=42):
