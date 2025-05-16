@@ -110,7 +110,7 @@ def call_claude(messages, temperature=0.0, max_tokens=4000):
         return None
 
 def extract_answer(response):
-    """Extract the answer grid from Claude's response (inside <answer> tags)"""
+    """Extract the answer grid from Claude's response (inside <answer> tags) and convert to 2D array"""
     if not response:
         return None
     
@@ -118,7 +118,17 @@ def extract_answer(response):
     answer_match = re.search(r'<answer>(.*?)</answer>', response, re.DOTALL)
     if answer_match:
         answer_text = answer_match.group(1).strip()
-        return answer_text
+        
+        # Convert string grid to 2D array
+        grid_array = []
+        for line in answer_text.strip().split('\n'):
+            if line.strip():  # Skip empty lines
+                # Convert line to list of integers
+                row = [int(num) for num in re.findall(r'\d+', line)]
+                if row:  # Only add non-empty rows
+                    grid_array.append(row)
+        
+        return grid_array
     
     return None
 
@@ -140,28 +150,36 @@ def format_for_comparison(grid_text):
     
     return '\n'.join(normalized_lines)
 
-def compare_grids(predicted, expected):
-    """Compare predicted grid with expected grid after normalizing both"""
-    if not predicted or not expected:
+def compare_grids(predicted_grid, expected_grid):
+    """Compare predicted grid with expected grid (both as 2D arrays)"""
+    if not predicted_grid or not expected_grid:
         return False
     
-    # Format both grids for comparison
-    formatted_predicted = format_for_comparison(predicted)
-    formatted_expected = format_for_comparison(expected)
-    
-    # Print the comparison
+    # Print the grids for comparison
     print("\nExpected Solution:")
-    print(formatted_expected)
-    print("\nClaude's Solution:")
-    print(formatted_predicted)
+    for row in expected_grid:
+        print(" ".join(str(num) for num in row))
     
-    # Check if they match
-    if formatted_predicted == formatted_expected:
-        print("\n✓ CORRECT: Claude's solution matches expected output")
-        return True
-    else:
-        print("\n✗ INCORRECT: Claude's solution does not match expected output")
+    print("\nClaude's Solution:")
+    for row in predicted_grid:
+        print(" ".join(str(num) for num in row))
+    
+    # Check grid dimensions
+    if len(predicted_grid) != len(expected_grid):
+        print(f"\n✗ INCORRECT: Grid dimensions don't match - Expected rows: {len(expected_grid)}, Got: {len(predicted_grid)}")
         return False
+    
+    # Check each row
+    for i, (pred_row, exp_row) in enumerate(zip(predicted_grid, expected_grid)):
+        if len(pred_row) != len(exp_row):
+            print(f"\n✗ INCORRECT: Row {i+1} dimensions don't match - Expected columns: {len(exp_row)}, Got: {len(pred_row)}")
+            return False
+        if pred_row != exp_row:
+            print(f"\n✗ INCORRECT: Row {i+1} contents don't match")
+            return False
+    
+    print("\n✓ CORRECT: Claude's solution matches expected output")
+    return True
 
 def save_results(example_id, messages, response, output_dir="results", extra_data=None):
     """Save the messages and response to a file with optional extra data"""
@@ -264,11 +282,11 @@ def main():
             
             # Get expected solution from dataset
             expected_solution = None
-            if "raw_test_outputs" in example and example["raw_test_outputs"]:
-                expected_solution = format_grid(example["raw_test_outputs"][0])
+            if "raw_solution" in example and example["raw_solution"]:
+                expected_solution = example["raw_solution"]
             
             # Compare Claude's answer with expected solution
-            if expected_solution and claude_answer:
+            if expected_solution is not None and claude_answer is not None:
                 is_correct = compare_grids(claude_answer, expected_solution)
                 # Include the result in the saved data
                 save_results(example_id, messages, response, args.output_dir, 
@@ -287,7 +305,8 @@ def main():
         else:
             print(f"Failed to get response for example {example_id}")
             
-        break
+        if i > 10:
+            break
 
 if __name__ == "__main__":
     main()
