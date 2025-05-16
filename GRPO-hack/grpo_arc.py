@@ -3,14 +3,17 @@ import pdb
 #
 # See https://github.com/willccbb/verifiers for ongoing developments
 #
+import wandb
 import re
 import torch
 from datasets import load_dataset, Dataset
-from one_arc_dataset import dataset
+from easy_dataset.easiest_arc_dataset import dataset
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from peft import LoraConfig
 from trl import GRPOConfig, GRPOTrainer
 
+
+wandb.init(project="grpo-arc")
 
 def calculate_nonzero_match_percentage(answer_str, output_str):
     """
@@ -83,7 +86,7 @@ def correctness_reward_func(prompts, completions, answer, **kwargs) -> list[floa
 
 def soft_format_reward_func(completions, **kwargs) -> list[float]:
     """Reward function that checks if the completion has a specific format."""
-    pattern = r"<reasoning>.*?</reasoning>\s*<answer>.*?</answer>"
+    pattern = r"<think>.*?</think>\s*<answer>.*?</answer>"
     responses = [completion[0]["content"] for completion in completions]
     matches = [re.match(pattern, r, flags=re.DOTALL) for r in responses] 
     return [0.5 if match else 0.0 for match in matches]
@@ -126,7 +129,7 @@ model = AutoModelForCausalLM.from_pretrained(
     BASE_MODEL_NAME,
     torch_dtype="auto",
     device_map="auto"
-).to('cuda')
+)
 
 tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL_NAME)
 tokenizer.pad_token = '<|endoftext|>'
