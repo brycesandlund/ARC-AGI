@@ -12,7 +12,7 @@ def grid_to_string(grid):
     return grid_str
 
 def generate_prompt(challenge):
-    prompt = "You are participating in a puzzle solving competition. You are an expert at solving puzzles.\n\nBelow is a list of input and output pairs with a pattern. Your goal is to identify the pattern or transformation in the training examples that maps the input to the output, then apply that pattern to the test input to give a final output.\n\nRespond in the format of the training output examples\n\n--Training Examples--"
+    prompt = "You are a genius at solving IQ tests.\n\nBelow is a list of input and output pairs with a pattern. Your goal is to identify the pattern or transformation in the training examples that maps the input to the output, then apply that pattern to the test input to give a final output. This is not a maths puzzle, the numbers represent colors. This is like a visual IQ test.\n\nRespond in the format of the training output examples\n\n--Training Examples--"
 
     for i in range(len(challenge["examples"]) - 1):
         prompt += f"\n--Example {i}-- \n\n INPUT: \n\n"
@@ -23,7 +23,7 @@ def generate_prompt(challenge):
 
     prompt += "\n\n--End of Training Examples--\n\n--Test Input--\n"
     prompt += grid_to_string(challenge["examples"][-1][0])
-    prompt += "\n\n--End of Test Input--\n\nProvide answer in <answer> tag precisely so that I can parse and validate."
+    prompt += "\n\n--End of Test Input--\n\nProvide answer in <answer> tag precisely so that I can parse and validate. After spending like 7000 tokens or trying for 5 times, just give up and provide <answer> so that I can give you feedback."
 
     return prompt, challenge["examples"][-1][1]
 

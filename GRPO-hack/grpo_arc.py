@@ -70,6 +70,8 @@ def correctness_reward_func(prompts, completions, answer, **kwargs) -> list[floa
     responses = [completion[0]['content'] for completion in completions]
     q = prompts[0][-1]['content']
     extracted_responses = [extract_xml_answer(r) for r in responses]
+    import pdb
+    pdb.set_trace()
     print(
         '*' * 20,
         f"\nResponse:\n{responses[0]}\n\n", '*' * 20,
@@ -103,15 +105,18 @@ training_args = GRPOConfig(
     logging_steps=1,
     bf16=True,
     per_device_train_batch_size=1,
-    gradient_accumulation_steps=8,
-    num_generations=8,
-    max_prompt_length=4000,
-    max_completion_length=2000,
+    gradient_accumulation_steps=16,
+    num_generations=16,
+    max_prompt_length=1860,
+    max_completion_length=8000,
     num_train_epochs=1,
     save_steps=100,
     max_grad_norm=0.1,
     report_to="wandb",
     log_on_each_node=False,
+    top_k=50,
+    top_p=0.65,
+    temperature=0.9,
 )
 
 peft_config = LoraConfig(
@@ -122,7 +127,7 @@ peft_config = LoraConfig(
     lora_dropout=0.05,
 )
 
-BASE_MODEL_NAME = "Qwen/Qwen3-0.6B-Base"
+BASE_MODEL_NAME = "Qwen/Qwen3-0.6B"
 
 # load the tokenizer and the model
 model = AutoModelForCausalLM.from_pretrained(
