@@ -17,14 +17,15 @@ model = AutoModelForCausalLM.from_pretrained(
     BASE_MODEL_NAME,
     torch_dtype="auto",
     device_map="auto"
-).to(device)
+)
 
 tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL_NAME)
 tokenizer.pad_token = '<|endoftext|>'
 tokenizer.eos_token_id = 151643
 
-dataset = load_dataset('tttx/r1-arcagi-successful-trajectories')['train']
-eval_dataset = load_dataset('tttx/r1-arcagi-successful-trajectories')['test']
+from datasets import load_from_disk
+
+dataset = load_from_disk("./GRPO-hack/filtered_dataset/r1-arcagi-successful-trajectories-8k")
 
 training_args = SFTConfig(
     output_dir="./",
@@ -38,13 +39,12 @@ training_args = SFTConfig(
     logging_steps=1,
     bf16=True,
     per_device_train_batch_size=1,
-    gradient_accumulation_steps=8,
-    max_length=20000,
-    num_train_epochs=3,
-    save_steps=100,
+    gradient_accumulation_steps=1,
+    max_length=8000,
+    num_train_epochs=4,
+    save_steps=400,
     max_grad_norm=0.2,
     report_to="wandb",
-    eval_steps=20,
     eos_token='<|endoftext|>',
 )
 
@@ -53,7 +53,6 @@ trainer = SFTTrainer(
     processing_class=tokenizer,
     train_dataset=dataset,
     args=training_args,
-    eval_dataset=eval_dataset,
 )
 
 trainer.train()
