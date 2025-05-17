@@ -65,25 +65,26 @@ def extract_xml_answer(text: str) -> str:
     answer = answer.split("</answer>")[0]
     return answer.strip()
 
+from score import score_arc_solution
+
 # Reward functions
 def correctness_reward_func(prompts, completions, answer, **kwargs) -> list[float]:
     responses = [completion[0]['content'] for completion in completions]
     q = prompts[0][-1]['content']
     extracted_responses = [extract_xml_answer(r) for r in responses]
-    import pdb
-    pdb.set_trace()
+
     print(
         '*' * 20,
         f"\nResponse:\n{responses[0]}\n\n", '*' * 20,
-        f"\nExtracted:\n{extracted_responses[0].strip()}",
-        f"\nAnswer:\n{answer[0].strip()}\n",
+        f"\nExtracted:\n{extracted_responses[0]}",
+        f"\nAnswer:\n{answer[0]}\n",
         '\n',
         '*' * 20,
-        calculate_nonzero_match_percentage(extracted_responses[0].strip(), answer[0].strip()),
+        score_arc_solution(extracted_responses[0], answer[0]),
         '\n',
         '*' * 20
     )
-    return [2.0 * calculate_nonzero_match_percentage(r.strip(), a.strip()) for r, a in zip(extracted_responses, answer)]
+    return [2.0 * score_arc_solution(r, a) for r, a in zip(extracted_responses, answer)]
 
 
 def soft_format_reward_func(completions, **kwargs) -> list[float]:
