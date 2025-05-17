@@ -2,7 +2,7 @@ import pdb
 import json
 from datasets import Dataset
 
-problems = json.load(open("./GRPO-hack/easy_dataset/easiest_arc_problems150.json", "r"))
+problems = json.load(open("/root/arc/ARC-AGI/GRPO-hack/easy_dataset/easiest_arc_problems150.json", "r"))
 
 def grid_to_string(grid):
     # Convert each row to a string representation with brackets
@@ -23,7 +23,7 @@ def generate_prompt(challenge):
 
     prompt += "\n\n--End of Training Examples--\n\n--Test Input--\n"
     prompt += grid_to_string(challenge["examples"][-1][0])
-    prompt += "\n\n--End of Test Input--\n\nProvide answer in <answer> tag precisely so that I can parse and validate. After spending like 7000 tokens or trying for 5 times, just give up and provide <answer> so that I can give you feedback."
+    prompt += "\n\n--End of Test Input--\n\nProvide answer in <answer> tag precisely so that I can parse and validate."
 
     return prompt, challenge["examples"][-1][1]
 
