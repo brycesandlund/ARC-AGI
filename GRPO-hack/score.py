@@ -111,12 +111,11 @@ def calculate_score(generated_output, expected_answer):
         cell_accuracy = correct_cells / total_cells if total_cells > 0 else 0
         
         # Check for pattern recognition (vertical symmetry in this case)
-        pattern_score = calculate_pattern_score(parsed_output, expected_answer)
+        # pattern_score = calculate_pattern_score(parsed_output, expected_answer)
         
-        # Combined score (weighted average)
-        alpha = 0.7  # Weight for cell accuracy
-        beta = 0.3   # Weight for pattern detection
-        combined_score = alpha * cell_accuracy + beta * pattern_score
+        combined_score = cell_accuracy
+        combined_score += 0.3 # this is for the dimension match
+        
         
         # Update scores dictionary
         scores.update({
@@ -124,7 +123,7 @@ def calculate_score(generated_output, expected_answer):
             "cell_accuracy_percent": float(cell_accuracy * 100),
             "correct_cells": int(correct_cells),
             "total_cells": int(total_cells),
-            "pattern_score": float(pattern_score),
+            "pattern_score": 0,
             "combined_score": float(combined_score)
         })
         
@@ -211,9 +210,7 @@ def score_arc_solution(generated_output, expected_answer):
     try:
         scores = calculate_score(generated_output, expected_answer)
         
-        # Print results
-        print("\n=== ARC Challenge Scoring ===")
-        
+        print("=" * 20)
         if "error" in scores:
             print(f"Error: {scores['error']}")
         
@@ -238,8 +235,8 @@ def score_arc_solution(generated_output, expected_answer):
         print(f"Successfully parsed: {scores.get('parsed_successfully', False)}")
         print(f"Dimensions match: {scores.get('dimension_match', False)}")
         print(f"Cell accuracy: {scores.get('cell_accuracy_percent', 0):.2f}% ({scores.get('correct_cells', 0)}/{scores.get('total_cells', 0)} cells)")
-        print(f"Pattern recognition score: {scores.get('pattern_score', 0):.4f}")
         print(f"Combined score: {scores.get('combined_score', 0):.4f}")
+        print('=' * 20)
         
         return scores['combined_score']
     
@@ -258,7 +255,7 @@ def score_arc_solution(generated_output, expected_answer):
         return 0
 
 # Example
-if __name__ == "__main__":
+def example_usage():
     # Example with well-formatted output
     generated_output_good = '[0, 1, 7, 9, 0, 0]\n[0, 1, 1, 0, 0, 0]\n[0, 4, 0, 9, 0, 0]\n[1, 4, 1, 3, 8, 9]\n[3, 6, 2, 6, 6, 6]\n[5, 6, 5, 7, 9, 4]'
     
@@ -344,11 +341,11 @@ The output for example 2 is:
         [5, 6, 5, 5, 6, 5]
     ]
     
-    print("\n=== Testing with well-formatted output ===")
+    # print("\n=== Testing with well-formatted output ===")
     scores1 = score_arc_solution(generated_output_good, expected_answer)
     
-    print("\n=== Testing with text that can't be parsed as a grid ===")
+    # print("\n=== Testing with text that can't be parsed as a grid ===")
     scores2 = score_arc_solution(generated_output_text, expected_answer)
     
-    print("\n=== Testing with wrong dimensions ===")
+    # print("\n=== Testing with wrong dimensions ===")
     scores3 = score_arc_solution(generated_output_wrong_dim, expected_answer)

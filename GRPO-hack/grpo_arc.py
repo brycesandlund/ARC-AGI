@@ -76,15 +76,9 @@ def correctness_reward_func(prompts, completions, answer, **kwargs) -> list[floa
     print(
         '*' * 20,
         f"\nResponse:\n{responses[0]}\n\n", '*' * 20,
-        f"\nExtracted:\n{extracted_responses[0]}",
-        f"\nAnswer:\n{answer[0]}\n",
-        '\n',
-        '*' * 20,
-        score_arc_solution(extracted_responses[0], answer[0]),
-        '\n',
         '*' * 20
     )
-    return [2.0 * score_arc_solution(r, a) for r, a in zip(extracted_responses, answer)]
+    return [score_arc_solution(r, a) for r, a in zip(extracted_responses, answer)]
 
 
 def soft_format_reward_func(completions, **kwargs) -> list[float]:
@@ -106,10 +100,10 @@ training_args = GRPOConfig(
     logging_steps=1,
     bf16=True,
     per_device_train_batch_size=1,
-    gradient_accumulation_steps=16,
-    num_generations=16,
+    gradient_accumulation_steps=8,
+    num_generations=8,
     max_prompt_length=1860,
-    max_completion_length=8000,
+    max_completion_length=5000,
     num_train_epochs=1,
     save_steps=100,
     max_grad_norm=0.1,
