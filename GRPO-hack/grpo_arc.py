@@ -7,11 +7,12 @@ import wandb
 import re
 import torch
 from datasets import load_dataset, Dataset
-from easy_dataset.easiest_arc_dataset import dataset
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from peft import LoraConfig
 from trl import GRPOConfig, GRPOTrainer
 
+from easy_dataset.easiest_arc_dataset import dataset, grid_to_string
+from claude import call_claude_api
 
 wandb.init(project="grpo-arc")
 
@@ -81,6 +82,39 @@ def correctness_reward_func(prompts, completions, answer, **kwargs) -> list[floa
     return [score_arc_solution(r, a) for r, a in zip(extracted_responses, answer)]
 
 
+def generate_judge_prompt(context, completion, answer) -> str:
+    prompt = "You are a teacher who is guiding a student to improve his reasoning skills.\n\n"
+    prompt += "You need to evaluate if the student's reasoning is in the right direction. The student has not arrived to the answer yet. You only need to evaluate current thinking process."
+    prompt += "The question is:\n" + context + "\n\n" + "The actual answer is:\n" + grid_to_string(answer) + "\n\n"
+    prompt += "The student is thinking:\n" + completion + "\n\n"
+    prompt += "Please evaluate and score the student's reasoning on a scale from 0 to 100."
+    prompt += "Please provide the score in <score>score</score> tags. No need to reason yourself or justify the score."
+    return prompt
+
+def llm_feedback_reward_func(prompts, completions, answer, **kwargs) -> list[float]:
+    judge_prompts = [generate_judge_prompt(p[0]['content'], c[0]['content'], a) 
+                    for p, c, a in zip(prompts, completions, answer)]
+    
+    scores = []
+    # Call Claude API for each prompt and extract scores
+    for judge_prompt in judge_prompts:
+        # Replace this with your actual Claude API call
+        claude_response = call_claude_api(judge_prompt)
+        
+        # Extract score from Claude's response using regex to find content between <score> tags
+        import re
+        score_match = re.search(r'<score>(\d+)</score>', claude_response)
+        
+        if score_match:
+            score = float(score_match.group(1))
+            scores.append(score)
+        else:
+            # If no score is found, default to 0
+            scores.append(0.0)
+    
+    return scores
+
+
 def soft_format_reward_func(completions, **kwargs) -> list[float]:
     """Reward function that checks if the completion has a specific format."""
     pattern = r"<think>.*?</think>\s*<answer>.*?</answer>"
@@ -103,7 +137,7 @@ training_args = GRPOConfig(
     gradient_accumulation_steps=8,
     num_generations=8,
     max_prompt_length=1860,
-    max_completion_length=5000,
+    max_completion_length=100,
     num_train_epochs=1,
     save_steps=100,
     max_grad_norm=0.1,
@@ -141,7 +175,8 @@ trainer = GRPOTrainer(
     processing_class=tokenizer,
     reward_funcs=[
         soft_format_reward_func,
-        correctness_reward_func
+        correctness_reward_func,
+        llm_feedback_reward_func,
     ],
     args=training_args,
     train_dataset=dataset,
