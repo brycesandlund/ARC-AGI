@@ -13,28 +13,28 @@ def grid_to_string(grid):
     return grid_str
 
 def generate_prompt(challenge):
-    prompt = "You are a genius at solving IQ tests.\n\nBelow is a list of input and output pairs with a pattern. Your goal is to identify the pattern or transformation in the training examples that maps the input to the output, then apply that pattern to the test input to give a final output. This is not a maths puzzle, the numbers represent colors. This is like a visual IQ test.\n\nRespond in the format of the training output examples\n\n--Training Examples--"
+    user_prompt = "You are a genius at solving IQ tests.\n\nBelow is a list of input and output pairs with a pattern. Your goal is to identify the pattern or transformation in the training examples that maps the input to the output, then apply that pattern to the test input to give a final output. This is not a maths puzzle, the numbers represent colors. This is like a visual IQ test.\n\nRespond in the format of the training output examples\n\n--Training Examples--"
 
     print("="*100)
     print(challenge)
     print("="*100)
     for i in range(len(challenge["examples"]) - 1):
-        prompt += f"\n--Example {i}-- \n\n INPUT: \n\n"
-        prompt += grid_to_string(challenge["examples"][i][0])
-        prompt += "\n\n\nOUTPUT: \n\n"
-        prompt += grid_to_string(challenge["examples"][i][1])
-        prompt += "\n\n"
+        user_prompt += f"\n--Example {i}-- \n\n INPUT: \n\n"
+        user_prompt += grid_to_string(challenge["examples"][i][0])
+        user_prompt += "\n\n\nOUTPUT: \n\n"
+        user_prompt += grid_to_string(challenge["examples"][i][1])
+        user_prompt += "\n\n"
 
-    prompt += "\n\n--End of Training Examples--\n\n<test_input>"
-    prompt += grid_to_string(challenge["examples"][-1][0])
-    prompt += "</test_input>"
+    user_prompt += "\n\n--End of Training Examples--\n\n<test_input>"
+    user_prompt += grid_to_string(challenge["examples"][-1][0])
+    user_prompt += "</test_input>"
     
-    # Include the answer in the prompt for supervised training
-    prompt += "<answer>"
-    prompt += grid_to_string(challenge["examples"][-1][1])
-    prompt += "</answer>"
+    # Create the assistant response with the answer
+    assistant_response = "<answer>"
+    assistant_response += grid_to_string(challenge["examples"][-1][1])
+    assistant_response += "</answer>"
 
-    return prompt
+    return user_prompt, assistant_response
 
 # Generate prompts from the first 10 examples of the HuggingFace dataset
 prompts = []
@@ -42,10 +42,11 @@ prompts = []
 i = 0
 for challenge in dataset["train"]:  # Only take first 10 examples
     # pdb.set_trace()
-    prompt = generate_prompt(challenge)
+    user_prompt, assistant_response = generate_prompt(challenge)
     prompts.append({
         "messages": [
-            {"role": "user", "content": prompt}
+            {"role": "user", "content": user_prompt},
+            {"role": "assistant", "content": assistant_response}
         ],
         "examples": challenge["examples"]  # Keep the original examples
     })
