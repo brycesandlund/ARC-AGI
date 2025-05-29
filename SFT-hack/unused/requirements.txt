@@ -1,0 +1,8 @@
+torch
+torchvision
+torchaudio
+transformers
+datasets
+trl
+wandb
+typing_extensions>=4.0.0

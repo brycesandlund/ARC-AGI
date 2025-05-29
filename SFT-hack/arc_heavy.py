@@ -15,9 +15,9 @@ def grid_to_string(grid):
 def generate_prompt(challenge):
     user_prompt = "You are a genius at solving IQ tests.\n\nBelow is a list of input and output pairs with a pattern. Your goal is to identify the pattern or transformation in the training examples that maps the input to the output, then apply that pattern to the test input to give a final output. This is not a maths puzzle, the numbers represent colors. This is like a visual IQ test.\n\nRespond in the format of the training output examples\n\n--Training Examples--"
 
-    print("="*100)
-    print(challenge)
-    print("="*100)
+    # print("="*100)
+    # print(challenge)
+    # print("="*100)
     for i in range(len(challenge["examples"]) - 1):
         user_prompt += f"\n--Example {i}-- \n\n INPUT: \n\n"
         user_prompt += grid_to_string(challenge["examples"][i][0])
@@ -40,7 +40,7 @@ def generate_prompt(challenge):
 prompts = []
 
 i = 0
-for challenge in dataset["train"]:  # Only take first 10 examples
+for challenge in dataset["train"]:  # Only take first 150k examples
     # pdb.set_trace()
     user_prompt, assistant_response = generate_prompt(challenge)
     prompts.append({
@@ -51,14 +51,16 @@ for challenge in dataset["train"]:  # Only take first 10 examples
         "examples": challenge["examples"]  # Keep the original examples
     })
     i += 1
-    if i > 10:
+    if i >= 30000:
         break
+    if i % 1000 == 0:
+        print(f"Processed {i} examples")
 
-# Save the prompts to a JSON file
-with open("arc_prompts.json", "w") as f:
-    json.dump(prompts, f, indent=2)
+# # Save the prompts to a JSON file
+# with open("arc_prompts.json", "w") as f:
+#     json.dump(prompts, f, indent=2)
 
-print(f"Saved {len(prompts)} prompts to arc_prompts.json")
+# print(f"Saved {len(prompts)} prompts to arc_prompts.json")
 
 # Create a HuggingFace dataset from the prompts
 dataset_dict = {
