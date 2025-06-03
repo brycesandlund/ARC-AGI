@@ -9,12 +9,12 @@ wandb.init(project="SFT_ARC")
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-BASE_MODEL_NAME = "unsloth/Qwen2.5-0.5B-bnb-4bit"  # Use Unsloth's optimized version
+BASE_MODEL_NAME = "unsloth/Qwen2.5-0.5B-Instruct-bnb-4bit"  # Use Unsloth's optimized version
 
 # Load model and tokenizer with Unsloth
 model, tokenizer = FastLanguageModel.from_pretrained(
     model_name=BASE_MODEL_NAME,
-    max_seq_length=1000,  # Your max sequence length
+    max_seq_length=10000,  # Your max sequence length
     dtype=None,  # Auto-detect
     load_in_4bit=True,  # Use 4-bit quantization for memory efficiency
 )
@@ -84,18 +84,17 @@ model = FastLanguageModel.get_peft_model(
     bias="none",  # "none" is optimized for Unsloth
     use_gradient_checkpointing=True,
     random_state=3407,
-    max_seq_length=1000,
+    max_seq_length=10000,
 )
 
-dataset = load_dataset("bcsandlund/arc-agi-prompts")['train']
+dataset = load_dataset("bcsandlund/arc-agi-prompts-train-test-split")['train']
 
 # Apply formatting to the dataset
 dataset = dataset.map(format_dataset_for_sft, remove_columns=dataset.column_names)
-import pdb; pdb.set_trace()
 training_args = SFTConfig(
     output_dir="./results_unsloth",
     run_name="test-sft-unsloth",
-    learning_rate=2e-4,  # Slightly higher LR works well with Unsloth
+    learning_rate=1e-7,  # Further reduced - was plateauing after only 250-300 examples
     adam_beta1=0.9,
     adam_beta2=0.99,
     weight_decay=0.1,
@@ -112,7 +111,7 @@ training_args = SFTConfig(
     report_to="wandb",
     dataset_text_field="text",  # Specify the text field
     optim="adamw_8bit",  # 8-bit optimizer for memory efficiency
-    hub_model_id="bcsandlund/arc-model-unsloth",
+    hub_model_id="bcsandlund/arc-model-unsloth-slow-lr-three-epochs-2",
     push_to_hub=True,
 )
 
