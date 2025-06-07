@@ -5,3 +5,4 @@ evaluate
 accelerate
 timm
 huggingface-hub
+trl

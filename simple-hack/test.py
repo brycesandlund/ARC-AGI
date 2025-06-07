@@ -1,6 +1,9 @@
 from transformers import AutoModelForCausalLM, AutoTokenizer
+from datasets import Dataset
+from trl import GRPOTrainer
 import random
 
+model_name = "Qwen/Qwen3-1.7B"
 
 def is_correct(content, target):
     """
@@ -84,7 +87,6 @@ def decompose_target(target, num_count=4, num_range=10):
     except (ZeroDivisionError, OverflowError):
         # If we get an invalid operation, try again
         return decompose_target(target, num_count, num_range)
-    
 
 def generate_problem(target, num_count=4, num_range=10):
     """
@@ -116,81 +118,107 @@ def generate_problem(target, num_count=4, num_range=10):
     print(f"Warning: Could not generate valid problem for target {target} after {max_attempts} attempts")
     return None, None
 
+def test_generate():
+    # Test the generate_problem function
+    print("\n" + "="*50)
+    print("Testing generate_problem function:")
+    print("="*50)
 
-# model_name = "Qwen/Qwen3-1.7B"
+    # Test with different targets
+    targets = [24, 24, 24, 24]
 
-# # load the tokenizer and the model
-# tokenizer = AutoTokenizer.from_pretrained(model_name)
-# model = AutoModelForCausalLM.from_pretrained(
-#     model_name,
-#     torch_dtype="auto",
-#     device_map="auto"
-# )
-
-# # prepare the model input
-# prompt = "Using the numbers 8, 4, 2 exactly once in mathematical notation using addition, subtraction, multiplication, division, and parentheses, create an expression that equals 16. Answer exactly in plain mathematical notation (no LaTeX), with no additional text. For example, if the provided numbers are 2, 7, and 2, a valid answer would be: 2 * 7 + 2."
-# messages = [
-#     {"role": "user", "content": prompt}
-# ]
-# text = tokenizer.apply_chat_template(
-#     messages,
-#     tokenize=False,
-#     add_generation_prompt=True,
-#     enable_thinking=True # Switches between thinking and non-thinking modes. Default is True.
-# )
-# model_inputs = tokenizer([text], return_tensors="pt").to(model.device)
-
-# # conduct text completion
-# generated_ids = model.generate(
-#     **model_inputs,
-#     max_new_tokens=32768,
-#     temperature=0.7,
-#     do_sample=True,
-#     repetition_penalty=1.1
-# )
-# output_ids = generated_ids[0][len(model_inputs.input_ids[0]):].tolist() 
-
-# raw = tokenizer.decode(generated_ids[0], skip_special_tokens=True).strip("\n")
-# # print("raw:", raw)
-
-# # parsing thinking content
-# try:
-#     # rindex finding 151668 (</think>)
-#     index = len(output_ids) - output_ids[::-1].index(151668)
-# except ValueError:
-#     index = 0
-
-# thinking_content = tokenizer.decode(output_ids[:index], skip_special_tokens=True).strip("\n")
-# content = tokenizer.decode(output_ids[index:], skip_special_tokens=True).strip("\n")
-
-# print("thinking content:", thinking_content)
-# print("content:", content)
-
-# # Check if the generated expression is correct
-# result_is_correct = is_correct(content, 16)
-# print(f"Is the answer correct? {result_is_correct}")
-
-# Test the decompose_target function
-print("\n" + "="*50)
-print("Testing decompose_target function:")
-print("="*50)
-
-# Test with different targets
-targets = [16, 16, 16]
-
-for target in targets:
-    print(f"\nTarget: {target}")
-    
-    # Generate 3 examples for each target using the improved function
-    for i in range(3):
-        numbers, expression = generate_problem(target, num_count=3, num_range=10)
+    for target in targets:
+        print(f"\nTarget: {target}")
         
-        print(f"  Attempt {i+1}:")
-        if numbers and expression:
-            print(f"    Numbers: {numbers}")
-            print(f"    ✓ Expression: {expression} = {target}")
-            print(f"    ✓ Is correct: {is_correct(expression, target)}")
-        else:
-            print(f"    ✗ Could not find valid expression after 100 attempts")
+        # Generate 3 examples for each target using the improved function
+        for i in range(3):
+            numbers, expression = generate_problem(target, num_count=4, num_range=10)
             
-    print("-" * 30)
+            print(f"  Attempt {i+1}:")
+            if numbers and expression:
+                print(f"    Numbers: {numbers}")
+                print(f"    ✓ Expression: {expression} = {target}")
+                print(f"    ✓ Is correct: {is_correct(expression, target)}")
+            else:
+                print(f"    ✗ Could not find valid expression after 100 attempts")
+                
+        print("-" * 30)
+
+def test_inference():
+    # load the tokenizer and the model
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model = AutoModelForCausalLM.from_pretrained(
+        model_name,
+        torch_dtype="auto",
+        device_map="auto"
+    )
+
+    # prepare the model input
+    prompt = "Using the numbers 10, 5, 4, 4 exactly once in mathematical notation using addition, subtraction, multiplication, division, and parentheses, create an expression that equals 24. Answer exactly in plain mathematical notation (DO NOT USE LATEX), WITH NO ADDITIONAL TEXT. For example, if the provided numbers are 3, 3, 2, 8, a valid answer would be: (3 / 3 + 2) * 8."
+    messages = [
+        {"role": "user", "content": prompt}
+    ]
+    text = tokenizer.apply_chat_template(
+        messages,
+        tokenize=False,
+        add_generation_prompt=True,
+        enable_thinking=True # Switches between thinking and non-thinking modes. Default is True.
+    )
+    model_inputs = tokenizer([text], return_tensors="pt").to(model.device)
+
+    print("starting inference...")
+
+    # conduct text completion
+    generated_ids = model.generate(
+        **model_inputs,
+        max_new_tokens=32768,
+        temperature=0.7,
+        do_sample=True,
+        repetition_penalty=1.1
+    )
+    output_ids = generated_ids[0][len(model_inputs.input_ids[0]):].tolist() 
+
+    raw = tokenizer.decode(generated_ids[0], skip_special_tokens=True).strip("\n")
+    # print("raw:", raw)
+
+    # parsing thinking content
+    try:
+        # rindex finding 151668 (</think>)
+        index = len(output_ids) - output_ids[::-1].index(151668)
+    except ValueError:
+        index = 0
+
+    thinking_content = tokenizer.decode(output_ids[:index], skip_special_tokens=True).strip("\n")
+    content = tokenizer.decode(output_ids[index:], skip_special_tokens=True).strip("\n")
+
+    print("thinking content:", thinking_content)
+    print("content:", content)
+
+    # Check if the generated expression is correct
+    result_is_correct = is_correct(content, 24)
+    print(f"Is the answer correct? {result_is_correct}")
+
+
+def reward_func(completions, **kwargs):
+    # Dummy reward function that rewards completions with more unique letters.
+    return [float(len(set(completion))) for completion in completions]
+
+def train():
+    # Define a dataset that contains both math and coding problems
+    dataset = Dataset.from_list(
+        [
+            {"prompt": "What is 2+2?", "task": "math"},
+            {"prompt": "Write a function that returns the sum of two numbers.", "task": "code"},
+            {"prompt": "What is 3*4?", "task": "math"},
+            {"prompt": "Write a function that returns the product of two numbers.", "task": "code"},
+        ]
+    )
+
+    # Use both task-specific reward functions
+    trainer = GRPOTrainer(
+        model=model_name,
+        reward_funcs=[reward_func],
+        train_dataset=dataset,
+    )
+
+    trainer.train()
