@@ -5,8 +5,46 @@ from peft import LoraConfig, get_peft_model
 import wandb
 import torch
 import random
+import re
 
 model_name = "Qwen/Qwen3-1.7B"
+dataset_size = 500
+
+def parse_completion(completion: str) -> (str, str):
+    """
+    Parses a completion string that may contain <think>...</think> blocks.
+    Extracts thinking content and the final answer.
+    
+    Args:
+        completion (str): The model's completion string.
+        
+    Returns:
+        tuple[str, str]: A tuple of (thinking_content, final_content).
+    """
+    end_tag = '</think>'
+    start_tag = '<think>'
+    
+    end_tag_pos = completion.rfind(end_tag)
+    
+    if end_tag_pos != -1:
+        content = completion[end_tag_pos + len(end_tag):].strip()
+        
+        # Extract thinking content
+        # The thinking content is between <think> and </think>
+        # We look for the last <think> before the last </think>
+        think_part = completion[:end_tag_pos]
+        start_tag_pos = think_part.rfind(start_tag)
+        
+        if start_tag_pos != -1:
+            thinking_content = think_part[start_tag_pos + len(start_tag):].strip()
+        else:
+            # Fallback if no start tag is found before the end tag
+            thinking_content = ""
+        
+        return thinking_content, content
+    
+    # No </think> tag found
+    return "", completion.strip()
 
 def is_correct(content, target):
     """
@@ -31,7 +69,7 @@ def is_correct(content, target):
         
     except (SyntaxError, NameError, ZeroDivisionError, TypeError, ValueError) as e:
         # Return False if the expression is invalid or causes an error
-        print(f"Error evaluating expression '{content}': {e}")
+        # print(f"Error evaluating expression '{content}': {e}")
         return False
 
 def decompose_target(target, num_count=4, num_range=10):
@@ -115,6 +153,7 @@ def generate_problem(target, num_count=4, num_range=10):
             
             # Convert all numbers to integers for clean output
             int_numbers = [int(num) for num in numbers]
+            random.shuffle(int_numbers)
             return int_numbers, expression
     
     # If we couldn't find a valid solution after max_attempts, return None
@@ -181,18 +220,9 @@ def test_inference():
     )
     output_ids = generated_ids[0][len(model_inputs.input_ids[0]):].tolist() 
 
-    raw = tokenizer.decode(generated_ids[0], skip_special_tokens=True).strip("\n")
-    # print("raw:", raw)
-
     # parsing thinking content
-    try:
-        # rindex finding 151668 (</think>)
-        index = len(output_ids) - output_ids[::-1].index(151668)
-    except ValueError:
-        index = 0
-
-    thinking_content = tokenizer.decode(output_ids[:index], skip_special_tokens=True).strip("\n")
-    content = tokenizer.decode(output_ids[index:], skip_special_tokens=True).strip("\n")
+    completion = tokenizer.decode(output_ids, skip_special_tokens=True)
+    thinking_content, content = parse_completion(completion)
 
     print("thinking content:", thinking_content)
     print("content:", content)
@@ -206,16 +236,17 @@ def generate_math_problems(tokenizer):
     Generator function that creates math problems using generate_problem.
     Yields dictionary with 'prompt' containing the problem description, formatted with thinking template.
     """
-    targets = [24, 20, 16, 12, 18, 30, 36, 15, 21, 25]  # Various target numbers
+    targets = [16]  # Various target numbers
     
-    for _ in range(1000):
+    for _ in range(dataset_size):
         target = random.choice(targets)
-        numbers, expression = generate_problem(target, num_count=4, num_range=10)
+        numbers, expression = generate_problem(target, num_count=3, num_range=10)
         
         if numbers and expression:  # Only yield if we successfully generated a problem
             # Create prompt similar to test_inference
             numbers_str = ", ".join(map(str, numbers))
-            prompt_content = f"Using the numbers {numbers_str} exactly once in mathematical notation using addition, subtraction, multiplication, division, and parentheses, create an expression that equals {target}. Answer exactly in plain mathematical notation (DO NOT USE LATEX), WITH NO ADDITIONAL TEXT. For example, if the provided numbers are 3, 3, 2, 8, a valid answer would be: (3 / 3 + 2) * 8."
+            # prompt_content = f"Using the numbers {numbers_str} exactly once in mathematical notation using addition, subtraction, multiplication, division, and/or parentheses, create an expression that equals {target}. Answer exactly in plain mathematical notation (DO NOT USE LATEX), WITH NO ADDITIONAL TEXT. For example, if the provided numbers are 3, 3, 2, 8, a valid answer would be: (3 / 3 + 2) * 8. As soon as you find a correct expression, output your answer."
+            prompt_content = f"Using the numbers {numbers_str} exactly once in mathematical notation using addition, subtraction, multiplication, division, and/or parentheses, create an expression that equals {target}. Keep your reasoning in the <think> block brief. Answer exactly in plain mathematical notation (DO NOT USE LATEX), WITH NO ADDITIONAL TEXT. For example, if the provided numbers are 2, 4, 4, a valid answer would be: (4 + 4) * 2. Or, if the numbers were 8, 1, 7, a valid answer would be 8 + 1 + 7. ANSWER AS SOON AS A CORRECT EXPRESSION IS FOUND."
             
             messages = [{"role": "user", "content": prompt_content}]
             
@@ -250,17 +281,29 @@ def math_reward_func(completions, prompts, **kwargs):
     for completion, prompt in zip(completions, prompts):
         # Extract target from prompt
         # Look for "equals X" pattern in the prompt
-        import re
         target_match = re.search(r'equals (\d+)', prompt)
         
+        # Clean the completion and check if it's correct
+        _, content = parse_completion(completion)
+
         if target_match:
             target = float(target_match.group(1))
-            # Clean the completion and check if it's correct
-            is_correct_answer = is_correct(completion, target)
+            is_correct_answer = is_correct(content, target)
             reward = 1.0 if is_correct_answer else 0.0
         else:
             # If we can't extract target, give low reward
             reward = 0.0
+        
+        # Penalize completions that are clearly unfinished (unclosed <think> tag)
+        if '<think>' in completion and '</think>' not in completion:
+            reward = -1.0
+            
+        print("\n-----")
+        print(f"Prompt: {prompt}")
+        print(f"Completion: {completion}")
+        print(f"Parsed Content: {content}")
+        print(f"Reward: {reward}")
+        print("-----")
             
         rewards.append(reward)
     
@@ -297,20 +340,20 @@ def get_training_config():
     """
     return {
         "model_name": model_name,
-        "learning_rate": 5e-5,
-        "batch_size": 4,
-        "gradient_accumulation_steps": 4,
-        "num_epochs": 3,
-        "max_completion_length": 500,
+        "learning_rate": 5e-5,  # Slightly lower learning rate for more stable training
+        "batch_size": 8,  # Increased batch size for A100. Reduce if you encounter OOM errors.
+        "gradient_accumulation_steps": 2,  # Effective batch size of 16
+        "num_epochs": 1,
+        "max_completion_length": 1500,
         "temperature": 0.7,
         "lora_r": 16,
         "lora_alpha": 32,
         "lora_dropout": 0.1,
-        "warmup_steps": 100,
-        "logging_steps": 10,
-        "save_steps": 500,
-        "eval_steps": 100,
-        "dataset_size": 1000,  # Number of problems to generate
+        "warmup_steps": 5,  # ~10% of total steps
+        "logging_steps": 5,
+        "save_steps": 5,   # Save every epoch
+        "eval_steps": 5,   # Eval every epoch
+        "dataset_size": dataset_size,  # Increased dataset size for more examples
     }
 
 def train():
@@ -456,6 +499,8 @@ def test_training_setup():
 
 def main():
     train()
+    # test_training_setup()
+    # test_inference()
 
 if __name__ == "__main__":
     main()
