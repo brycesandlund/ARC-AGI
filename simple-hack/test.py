@@ -198,27 +198,110 @@ def test_inference():
     result_is_correct = is_correct(content, 24)
     print(f"Is the answer correct? {result_is_correct}")
 
+def generate_math_problems():
+    """
+    Generator function that creates math problems using generate_problem.
+    Yields dictionary with 'prompt' containing the problem description.
+    """
+    targets = [24, 20, 16, 12, 18, 30, 36, 15, 21, 25]  # Various target numbers
+    
+    for _ in range(1000):
+        target = random.choice(targets)
+        numbers, expression = generate_problem(target, num_count=4, num_range=10)
+        
+        if numbers and expression:  # Only yield if we successfully generated a problem
+            # Create prompt similar to test_inference
+            numbers_str = ", ".join(map(str, numbers))
+            prompt = f"Using the numbers {numbers_str} exactly once in mathematical notation using addition, subtraction, multiplication, division, and parentheses, create an expression that equals {target}. Answer exactly in plain mathematical notation (DO NOT USE LATEX), WITH NO ADDITIONAL TEXT. For example, if the provided numbers are 3, 3, 2, 8, a valid answer would be: (3 / 3 + 2) * 8."
+            
+            yield {
+                "prompt": prompt,
+                "target": target,
+                "numbers": numbers
+            }
 
-def reward_func(completions, **kwargs):
-    # Dummy reward function that rewards completions with more unique letters.
-    return [float(len(set(completion))) for completion in completions]
+def math_reward_func(completions, prompts, **kwargs):
+    """
+    Reward function that evaluates mathematical correctness using is_correct.
+    
+    Args:
+        completions: List of generated completions
+        prompts: List of prompts (to extract target values)
+        **kwargs: Additional arguments
+        
+    Returns:
+        List of reward scores (1.0 for correct, 0.0 for incorrect)
+    """
+    rewards = []
+    
+    for completion, prompt in zip(completions, prompts):
+        # Extract target from prompt
+        # Look for "equals X" pattern in the prompt
+        import re
+        target_match = re.search(r'equals (\d+)', prompt)
+        
+        if target_match:
+            target = float(target_match.group(1))
+            # Clean the completion and check if it's correct
+            is_correct_answer = is_correct(completion, target)
+            reward = 1.0 if is_correct_answer else 0.0
+        else:
+            # If we can't extract target, give low reward
+            reward = 0.0
+            
+        rewards.append(reward)
+    
+    return rewards
+
+def test_reward():
+    """
+    Test the reward function with some sample completions and prompts
+    """
+    test_completions = [
+        "(4 + 4) * 3",  # Should be correct for target 24
+        "4 + 4 + 3",    # Should be incorrect for target 24
+        "10 * 2asdf"    # Should be correct for target 24
+    ]
+    
+    test_prompts = [
+        "Using the numbers 4, 4, 3, 3 exactly once in mathematical notation using addition, subtraction, multiplication, division, and parentheses, create an expression that equals 24.",
+        "Using the numbers 4, 4, 3, 3 exactly once in mathematical notation using addition, subtraction, multiplication, division, and parentheses, create an expression that equals 24.",
+        "Using the numbers 10, 2, 4, 4 exactly once in mathematical notation using addition, subtraction, multiplication, division, and parentheses, create an expression that equals 24."
+    ]
+    
+    rewards = math_reward_func(test_completions, test_prompts)
+    
+    print("\nTesting reward function:")
+    for i, (completion, prompt, reward) in enumerate(zip(test_completions, test_prompts, rewards)):
+        print(f"\nTest {i+1}:")
+        print(f"  Completion: {completion}")
+        print(f"  Reward: {reward}")
 
 def train():
-    # Define a dataset that contains both math and coding problems
-    dataset = Dataset.from_list(
-        [
-            {"prompt": "What is 2+2?", "task": "math"},
-            {"prompt": "Write a function that returns the sum of two numbers.", "task": "code"},
-            {"prompt": "What is 3*4?", "task": "math"},
-            {"prompt": "Write a function that returns the product of two numbers.", "task": "code"},
-        ]
+    """
+    Train the model using GRPO with math problems generated from generate_problem function.
+    """
+    # Create dataset from generator
+    dataset = Dataset.from_generator(
+        generate_math_problems,
+        gen_kwargs={},
     )
+    
+    print(f"Created dataset with {len(dataset)} examples")
+    # print("Sample examples:")
+    # for i in range(3):
+    #     print(f"  Example {i+1}: {dataset[i]['prompt']}")
 
-    # Use both task-specific reward functions
+    # Initialize trainer with math reward function
     trainer = GRPOTrainer(
         model=model_name,
-        reward_funcs=[reward_func],
+        reward_funcs=[math_reward_func],
         train_dataset=dataset,
     )
 
+    print("Starting GRPO training...")
     trainer.train()
+    print("Training completed!")
+
+
+train()
