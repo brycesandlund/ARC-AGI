@@ -1,6 +1,9 @@
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from datasets import Dataset
-from trl import GRPOTrainer
+from trl import GRPOTrainer, GRPOConfig
+from peft import LoraConfig, get_peft_model
+import wandb
+import torch
 import random
 
 model_name = "Qwen/Qwen3-1.7B"
@@ -277,31 +280,170 @@ def test_reward():
         print(f"  Completion: {completion}")
         print(f"  Reward: {reward}")
 
+def get_training_config():
+    """
+    Get training configuration parameters.
+    You can modify these values to experiment with different settings.
+    """
+    return {
+        "model_name": model_name,
+        "learning_rate": 5e-5,
+        "batch_size": 4,
+        "gradient_accumulation_steps": 4,
+        "num_epochs": 3,
+        "max_completion_length": 32768,
+        "temperature": 0.7,
+        "lora_r": 16,
+        "lora_alpha": 32,
+        "lora_dropout": 0.1,
+        "warmup_steps": 100,
+        "logging_steps": 10,
+        "save_steps": 500,
+        "eval_steps": 100,
+        "dataset_size": 1000,  # Number of problems to generate
+    }
+
 def train():
     """
     Train the model using GRPO with math problems generated from generate_problem function.
     """
-    # Create dataset from generator
-    dataset = Dataset.from_generator(
-        generate_math_problems,
-        gen_kwargs={},
+    config = get_training_config()
+    
+    # Initialize wandb
+    wandb.init(
+        project="math-grpo-training",
+        name="qwen-math-24-game",
+        config=config
     )
     
-    print(f"Created dataset with {len(dataset)} examples")
-    # print("Sample examples:")
-    # for i in range(3):
-    #     print(f"  Example {i+1}: {dataset[i]['prompt']}")
+    # Create separate train and eval datasets
+    full_dataset = Dataset.from_generator(generate_math_problems, gen_kwargs={})
+    dataset_size = min(len(full_dataset), wandb.config.dataset_size)
+
+    # Split into train/eval (e.g., 80/20 split)
+    train_size = int(0.8 * dataset_size)
+    train_dataset = full_dataset.select(range(train_size))
+    eval_dataset = full_dataset.select(range(train_size, dataset_size))
+
+    print(f"Created dataset with {len(train_dataset)} training examples and {len(eval_dataset)} evaluation examples")
+    
+    # Load tokenizer
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    
+    # Load base model
+    model = AutoModelForCausalLM.from_pretrained(
+        model_name,
+        torch_dtype=torch.bfloat16,
+        device_map="auto",
+        trust_remote_code=True
+    )
+    
+    # Configure LoRA
+    lora_config = LoraConfig(
+        r=wandb.config.lora_r,
+        lora_alpha=wandb.config.lora_alpha,
+        target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+        lora_dropout=wandb.config.lora_dropout,
+        bias="none",
+        task_type="CAUSAL_LM"
+    )
+    
+    # Apply LoRA to model
+    model = get_peft_model(model, lora_config)
+    model.print_trainable_parameters()
+    
+    # Configure GRPO training arguments
+    grpo_config = GRPOConfig(
+        output_dir="./grpo-math-model",
+        learning_rate=wandb.config.learning_rate,
+        per_device_train_batch_size=wandb.config.batch_size,
+        gradient_accumulation_steps=wandb.config.gradient_accumulation_steps,
+        num_train_epochs=wandb.config.num_epochs,
+        max_completion_length=wandb.config.max_completion_length,
+        temperature=wandb.config.temperature,
+        logging_steps=wandb.config.logging_steps,
+        save_steps=wandb.config.save_steps,
+        eval_steps=wandb.config.eval_steps,
+        save_total_limit=3,
+        remove_unused_columns=False,
+        push_to_hub=False,
+        report_to="wandb",
+        run_name="qwen-math-grpo",
+        gradient_checkpointing=True,
+        dataloader_drop_last=True,
+        eval_strategy="steps",
+        save_strategy="steps",
+        warmup_steps=wandb.config.warmup_steps,
+        bf16=True,
+    )
 
     # Initialize trainer with math reward function
     trainer = GRPOTrainer(
-        model=model_name,
+        model=model,
+        args=grpo_config,
+        processing_class=tokenizer,
         reward_funcs=[math_reward_func],
-        train_dataset=dataset,
+        train_dataset=train_dataset,
+        eval_dataset=eval_dataset,
     )
 
     print("Starting GRPO training...")
     trainer.train()
+    
+    # Save the final model
+    trainer.save_model("./grpo-math-final")
+    
     print("Training completed!")
+    wandb.finish()
 
+def test_training_setup():
+    """
+    Test the training setup without actually training to make sure everything works.
+    """
+    print("Testing training setup...")
+    
+    try:
+        # Test imports
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+        from trl import GRPOTrainer, GRPOConfig
+        from peft import LoraConfig, get_peft_model
+        import wandb
+        print("✓ All imports successful")
+        
+        # Test model loading
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+        print("✓ Tokenizer loaded successfully")
+        
+        # Test dataset generation
+        dataset = Dataset.from_generator(
+            generate_math_problems,
+            gen_kwargs={},
+        )
+        dataset = dataset.select(range(10))  # Just test with 10 examples
+        print(f"✓ Dataset created with {len(dataset)} examples")
+        
+        # Test reward function
+        test_completions = ["4 + 4 + 4 * 4", "2 * 12"]
+        test_prompts = [
+            "Using the numbers 4, 4, 4, 4 exactly once in mathematical notation using addition, subtraction, multiplication, division, and parentheses, create an expression that equals 24.",
+            "Using the numbers 2, 12, 1, 1 exactly once in mathematical notation using addition, subtraction, multiplication, division, and parentheses, create an expression that equals 24."
+        ]
+        rewards = math_reward_func(test_completions, test_prompts)
+        print(f"✓ Reward function working, rewards: {rewards}")
+        
+        print("✓ All setup tests passed!")
+        return True
+        
+    except Exception as e:
+        print(f"✗ Setup test failed: {e}")
+        return False
 
-train()
+def main():
+    train()
+
+if __name__ == "__main__":
+    main()
