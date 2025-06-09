@@ -201,10 +201,10 @@ def test_inference():
     result_is_correct = is_correct(content, 24)
     print(f"Is the answer correct? {result_is_correct}")
 
-def generate_math_problems():
+def generate_math_problems(tokenizer):
     """
     Generator function that creates math problems using generate_problem.
-    Yields dictionary with 'prompt' containing the problem description.
+    Yields dictionary with 'prompt' containing the problem description, formatted with thinking template.
     """
     targets = [24, 20, 16, 12, 18, 30, 36, 15, 21, 25]  # Various target numbers
     
@@ -215,7 +215,17 @@ def generate_math_problems():
         if numbers and expression:  # Only yield if we successfully generated a problem
             # Create prompt similar to test_inference
             numbers_str = ", ".join(map(str, numbers))
-            prompt = f"Using the numbers {numbers_str} exactly once in mathematical notation using addition, subtraction, multiplication, division, and parentheses, create an expression that equals {target}. Answer exactly in plain mathematical notation (DO NOT USE LATEX), WITH NO ADDITIONAL TEXT. For example, if the provided numbers are 3, 3, 2, 8, a valid answer would be: (3 / 3 + 2) * 8."
+            prompt_content = f"Using the numbers {numbers_str} exactly once in mathematical notation using addition, subtraction, multiplication, division, and parentheses, create an expression that equals {target}. Answer exactly in plain mathematical notation (DO NOT USE LATEX), WITH NO ADDITIONAL TEXT. For example, if the provided numbers are 3, 3, 2, 8, a valid answer would be: (3 / 3 + 2) * 8."
+            
+            messages = [{"role": "user", "content": prompt_content}]
+            
+            # Apply chat template with thinking mode enabled
+            prompt = tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True,
+                enable_thinking=True
+            )
             
             yield {
                 "prompt": prompt,
@@ -291,7 +301,7 @@ def get_training_config():
         "batch_size": 4,
         "gradient_accumulation_steps": 4,
         "num_epochs": 3,
-        "max_completion_length": 32768,
+        "max_completion_length": 500,
         "temperature": 0.7,
         "lora_r": 16,
         "lora_alpha": 32,
@@ -316,8 +326,15 @@ def train():
         config=config
     )
     
+    # Load tokenizer first to format prompts
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
     # Create separate train and eval datasets
-    full_dataset = Dataset.from_generator(generate_math_problems, gen_kwargs={})
+    full_dataset = Dataset.from_generator(
+        generate_math_problems, gen_kwargs={"tokenizer": tokenizer}
+    )
     dataset_size = min(len(full_dataset), wandb.config.dataset_size)
 
     # Split into train/eval (e.g., 80/20 split)
@@ -326,11 +343,6 @@ def train():
     eval_dataset = full_dataset.select(range(train_size, dataset_size))
 
     print(f"Created dataset with {len(train_dataset)} training examples and {len(eval_dataset)} evaluation examples")
-    
-    # Load tokenizer
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
     
     # Load base model
     model = AutoModelForCausalLM.from_pretrained(
@@ -421,7 +433,7 @@ def test_training_setup():
         # Test dataset generation
         dataset = Dataset.from_generator(
             generate_math_problems,
-            gen_kwargs={},
+            gen_kwargs={"tokenizer": tokenizer},
         )
         dataset = dataset.select(range(10))  # Just test with 10 examples
         print(f"✓ Dataset created with {len(dataset)} examples")
