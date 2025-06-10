@@ -8,7 +8,8 @@ import random
 import re
 
 model_name = "Qwen/Qwen3-1.7B"
-dataset_size = 100
+dataset_size = 400
+experiment_name = "grpo-16-game-2"
 
 def parse_completion(completion: str) -> (str, str):
     """
@@ -236,17 +237,16 @@ def generate_math_problems(tokenizer):
     Generator function that creates math problems using generate_problem.
     Yields dictionary with 'prompt' containing the problem description, formatted with thinking template.
     """
-    targets = [16]  # Various target numbers
+    targets = [24]  # Various target numbers
     
     for _ in range(dataset_size):
         target = random.choice(targets)
-        numbers, expression = generate_problem(target, num_count=3, num_range=10)
+        numbers, expression = generate_problem(target, num_count=4, num_range=10)
         
         if numbers and expression:  # Only yield if we successfully generated a problem
             # Create prompt similar to test_inference
             numbers_str = ", ".join(map(str, numbers))
-            # prompt_content = f"Using the numbers {numbers_str} exactly once in mathematical notation using addition, subtraction, multiplication, division, and/or parentheses, create an expression that equals {target}. Answer exactly in plain mathematical notation (DO NOT USE LATEX), WITH NO ADDITIONAL TEXT. For example, if the provided numbers are 3, 3, 2, 8, a valid answer would be: (3 / 3 + 2) * 8. As soon as you find a correct expression, output your answer."
-            prompt_content = f"Using the numbers {numbers_str} exactly once in mathematical notation using addition, subtraction, multiplication, division, and/or parentheses, create an expression that equals {target}. Keep your reasoning in the <think> block brief. Answer exactly in plain mathematical notation (DO NOT USE LATEX), WITH NO ADDITIONAL TEXT. For example, if the provided numbers are 2, 4, 4, a valid answer would be: (4 + 4) * 2. Or, if the numbers were 8, 1, 7, a valid answer would be 8 + 1 + 7. ANSWER AS SOON AS A CORRECT EXPRESSION IS FOUND. Do not include = 16 in your answer."
+            prompt_content = f"Using the numbers {numbers_str} exactly once in mathematical notation using addition, subtraction, multiplication, division, and/or parentheses, create an expression that equals {target}. Keep your reasoning in the <think> block brief. Answer exactly in plain mathematical notation (DO NOT USE LATEX), WITH NO ADDITIONAL TEXT. For example, if the provided numbers are 8, 3, 2, 3, a valid answer would be: (3 / 3 + 2) * 8. Or, if the numbers were 8, 2, 9, 9, a valid answer would be 9 + 9 - 2 + 8. ANSWER AS SOON AS A CORRECT EXPRESSION IS FOUND. Do not include = {target} in your answer."
             
             messages = [{"role": "user", "content": prompt_content}]
             
@@ -342,7 +342,7 @@ def get_training_config():
         "model_name": model_name,
         "learning_rate": 5e-5,  # Slightly lower learning rate for more stable training
         "batch_size": 8,  # Increased batch size for A100. Reduce if you encounter OOM errors.
-        "gradient_accumulation_steps": 1,  # Effective batch size of 16
+        "gradient_accumulation_steps": 1,  # Effective batch size of 8
         "num_epochs": 1,
         "max_completion_length": 1500,
         "temperature": 0.7,
@@ -365,7 +365,7 @@ def train():
     # Initialize wandb
     wandb.init(
         project="math-grpo-training",
-        name="qwen-math-24-game",
+        name=experiment_name,
         config=config
     )
     
@@ -411,13 +411,14 @@ def train():
     
     # Configure GRPO training arguments
     grpo_config = GRPOConfig(
-        output_dir="./grpo-16-game-1",
-        run_name="grpo-16-game-1",
+        output_dir=f"./{experiment_name}",
+        run_name=experiment_name,
         weight_decay=0.01,
         max_grad_norm=1.0,
         learning_rate=wandb.config.learning_rate,
         lr_scheduler_type="cosine",
-        per_device_train_batch_size=wandb.config.batch_size,
+        per_device_train_batch_size=wandb.config.batch_size,    # Any higher batch size / num_generations will run out of memory on an A100.
+        num_generations=8,
         gradient_accumulation_steps=wandb.config.gradient_accumulation_steps,
         num_train_epochs=wandb.config.num_epochs,
         max_completion_length=wandb.config.max_completion_length,
@@ -452,7 +453,7 @@ def train():
     trainer.train()
 
     print("Pushing model to Hugging Face Hub...")
-    trainer.model.push_to_hub("bcsandlund/math-24-game-1")
+    trainer.model.push_to_hub(f"bcsandlund/{experiment_name}")
 
     print("Training completed! Running evaluation...")
     eval_results = trainer.evaluate()
