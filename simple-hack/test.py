@@ -9,7 +9,7 @@ import re
 
 model_name = "Qwen/Qwen3-1.7B"
 dataset_size = 400
-experiment_name = "grpo-16-game-2"
+experiment_name = "math-24-game-2"
 
 def parse_completion(completion: str) -> (str, str):
     """
