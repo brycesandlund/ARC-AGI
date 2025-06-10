@@ -8,7 +8,7 @@ import random
 import re
 
 model_name = "Qwen/Qwen3-1.7B"
-dataset_size = 500
+dataset_size = 100
 
 def parse_completion(completion: str) -> (str, str):
     """
@@ -246,7 +246,7 @@ def generate_math_problems(tokenizer):
             # Create prompt similar to test_inference
             numbers_str = ", ".join(map(str, numbers))
             # prompt_content = f"Using the numbers {numbers_str} exactly once in mathematical notation using addition, subtraction, multiplication, division, and/or parentheses, create an expression that equals {target}. Answer exactly in plain mathematical notation (DO NOT USE LATEX), WITH NO ADDITIONAL TEXT. For example, if the provided numbers are 3, 3, 2, 8, a valid answer would be: (3 / 3 + 2) * 8. As soon as you find a correct expression, output your answer."
-            prompt_content = f"Using the numbers {numbers_str} exactly once in mathematical notation using addition, subtraction, multiplication, division, and/or parentheses, create an expression that equals {target}. Keep your reasoning in the <think> block brief. Answer exactly in plain mathematical notation (DO NOT USE LATEX), WITH NO ADDITIONAL TEXT. For example, if the provided numbers are 2, 4, 4, a valid answer would be: (4 + 4) * 2. Or, if the numbers were 8, 1, 7, a valid answer would be 8 + 1 + 7. ANSWER AS SOON AS A CORRECT EXPRESSION IS FOUND."
+            prompt_content = f"Using the numbers {numbers_str} exactly once in mathematical notation using addition, subtraction, multiplication, division, and/or parentheses, create an expression that equals {target}. Keep your reasoning in the <think> block brief. Answer exactly in plain mathematical notation (DO NOT USE LATEX), WITH NO ADDITIONAL TEXT. For example, if the provided numbers are 2, 4, 4, a valid answer would be: (4 + 4) * 2. Or, if the numbers were 8, 1, 7, a valid answer would be 8 + 1 + 7. ANSWER AS SOON AS A CORRECT EXPRESSION IS FOUND. Do not include = 16 in your answer."
             
             messages = [{"role": "user", "content": prompt_content}]
             
@@ -342,7 +342,7 @@ def get_training_config():
         "model_name": model_name,
         "learning_rate": 5e-5,  # Slightly lower learning rate for more stable training
         "batch_size": 8,  # Increased batch size for A100. Reduce if you encounter OOM errors.
-        "gradient_accumulation_steps": 2,  # Effective batch size of 16
+        "gradient_accumulation_steps": 1,  # Effective batch size of 16
         "num_epochs": 1,
         "max_completion_length": 1500,
         "temperature": 0.7,
@@ -350,9 +350,9 @@ def get_training_config():
         "lora_alpha": 32,
         "lora_dropout": 0.1,
         "warmup_steps": 5,  # ~10% of total steps
-        "logging_steps": 5,
-        "save_steps": 5,   # Save every epoch
-        "eval_steps": 5,   # Eval every epoch
+        "logging_steps": 1,
+        # "save_steps": 100,   # Save every epoch
+        # "eval_steps": 100,   # Eval every epoch
         "dataset_size": dataset_size,  # Increased dataset size for more examples
     }
 
@@ -411,25 +411,29 @@ def train():
     
     # Configure GRPO training arguments
     grpo_config = GRPOConfig(
-        output_dir="./grpo-math-model",
+        output_dir="./grpo-16-game-1",
+        run_name="grpo-16-game-1",
+        weight_decay=0.01,
+        max_grad_norm=1.0,
         learning_rate=wandb.config.learning_rate,
+        lr_scheduler_type="cosine",
         per_device_train_batch_size=wandb.config.batch_size,
         gradient_accumulation_steps=wandb.config.gradient_accumulation_steps,
         num_train_epochs=wandb.config.num_epochs,
         max_completion_length=wandb.config.max_completion_length,
         temperature=wandb.config.temperature,
         logging_steps=wandb.config.logging_steps,
-        save_steps=wandb.config.save_steps,
-        eval_steps=wandb.config.eval_steps,
-        save_total_limit=3,
-        remove_unused_columns=False,
-        push_to_hub=False,
+        # save_steps=wandb.config.save_steps,
+        # eval_steps=wandb.config.eval_steps,
+        # save_total_limit=3,
+        # remove_unused_columns=False,
+        # hub_model_id="bcsandlund/math-24-game-1",
+        # push_to_hub=True,
         report_to="wandb",
-        run_name="qwen-math-grpo",
-        gradient_checkpointing=True,
-        dataloader_drop_last=True,
-        eval_strategy="steps",
-        save_strategy="steps",
+        gradient_checkpointing=True,        # Ran out of memory on an A100 without this.
+        # dataloader_drop_last=True,
+        # eval_strategy="steps",
+        # save_strategy="steps",
         warmup_steps=wandb.config.warmup_steps,
         bf16=True,
     )
@@ -446,60 +450,18 @@ def train():
 
     print("Starting GRPO training...")
     trainer.train()
-    
-    # Save the final model
-    trainer.save_model("./grpo-math-final")
-    
-    print("Training completed!")
-    wandb.finish()
 
-def test_training_setup():
-    """
-    Test the training setup without actually training to make sure everything works.
-    """
-    print("Testing training setup...")
-    
-    try:
-        # Test imports
-        from transformers import AutoModelForCausalLM, AutoTokenizer
-        from trl import GRPOTrainer, GRPOConfig
-        from peft import LoraConfig, get_peft_model
-        import wandb
-        print("✓ All imports successful")
-        
-        # Test model loading
-        tokenizer = AutoTokenizer.from_pretrained(model_name)
-        if tokenizer.pad_token is None:
-            tokenizer.pad_token = tokenizer.eos_token
-        print("✓ Tokenizer loaded successfully")
-        
-        # Test dataset generation
-        dataset = Dataset.from_generator(
-            generate_math_problems,
-            gen_kwargs={"tokenizer": tokenizer},
-        )
-        dataset = dataset.select(range(10))  # Just test with 10 examples
-        print(f"✓ Dataset created with {len(dataset)} examples")
-        
-        # Test reward function
-        test_completions = ["4 + 4 + 4 * 4", "2 * 12"]
-        test_prompts = [
-            "Using the numbers 4, 4, 4, 4 exactly once in mathematical notation using addition, subtraction, multiplication, division, and parentheses, create an expression that equals 24.",
-            "Using the numbers 2, 12, 1, 1 exactly once in mathematical notation using addition, subtraction, multiplication, division, and parentheses, create an expression that equals 24."
-        ]
-        rewards = math_reward_func(test_completions, test_prompts)
-        print(f"✓ Reward function working, rewards: {rewards}")
-        
-        print("✓ All setup tests passed!")
-        return True
-        
-    except Exception as e:
-        print(f"✗ Setup test failed: {e}")
-        return False
+    print("Pushing model to Hugging Face Hub...")
+    trainer.model.push_to_hub("bcsandlund/math-24-game-1")
+
+    print("Training completed! Running evaluation...")
+    eval_results = trainer.evaluate()
+    print(f"Eval results: {eval_results}")
+
+    wandb.finish()
 
 def main():
     train()
-    # test_training_setup()
     # test_inference()
 
 if __name__ == "__main__":
