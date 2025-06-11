@@ -333,40 +333,14 @@ def test_reward():
         print(f"  Completion: {completion}")
         print(f"  Reward: {reward}")
 
-def get_training_config():
-    """
-    Get training configuration parameters.
-    You can modify these values to experiment with different settings.
-    """
-    return {
-        "model_name": model_name,
-        "learning_rate": 5e-5,  # Slightly lower learning rate for more stable training
-        "batch_size": 8,  # Increased batch size for A100. Reduce if you encounter OOM errors.
-        "gradient_accumulation_steps": 1,  # Effective batch size of 8
-        "num_epochs": 1,
-        "max_completion_length": 1500,
-        "temperature": 0.7,
-        "lora_r": 16,
-        "lora_alpha": 32,
-        "lora_dropout": 0.1,
-        "warmup_steps": 5,  # ~10% of total steps
-        "logging_steps": 1,
-        # "save_steps": 100,   # Save every epoch
-        # "eval_steps": 100,   # Eval every epoch
-        "dataset_size": dataset_size,  # Increased dataset size for more examples
-    }
-
 def train():
     """
     Train the model using GRPO with math problems generated from generate_problem function.
     """
-    config = get_training_config()
-    
     # Initialize wandb
     wandb.init(
         project="math-grpo-training",
-        name=experiment_name,
-        config=config
+        name=experiment_name
     )
     
     # Load tokenizer first to format prompts
@@ -378,12 +352,13 @@ def train():
     full_dataset = Dataset.from_generator(
         generate_math_problems, gen_kwargs={"tokenizer": tokenizer}
     )
-    dataset_size = min(len(full_dataset), wandb.config.dataset_size)
+    dataset_size_used = min(len(full_dataset), dataset_size)
 
-    # Split into train/eval (e.g., 80/20 split)
-    train_size = int(0.8 * dataset_size)
+    # Split into train/eval with fixed eval size of 30
+    eval_size = 30
+    train_size = dataset_size_used - eval_size
     train_dataset = full_dataset.select(range(train_size))
-    eval_dataset = full_dataset.select(range(train_size, dataset_size))
+    eval_dataset = full_dataset.select(range(train_size, dataset_size_used))
 
     print(f"Created dataset with {len(train_dataset)} training examples and {len(eval_dataset)} evaluation examples")
     
@@ -397,10 +372,10 @@ def train():
     
     # Configure LoRA
     lora_config = LoraConfig(
-        r=wandb.config.lora_r,
-        lora_alpha=wandb.config.lora_alpha,
+        r=16,
+        lora_alpha=32,
         target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
-        lora_dropout=wandb.config.lora_dropout,
+        lora_dropout=0.1,
         bias="none",
         task_type="CAUSAL_LM"
     )
@@ -415,27 +390,18 @@ def train():
         run_name=experiment_name,
         weight_decay=0.01,
         max_grad_norm=1.0,
-        learning_rate=wandb.config.learning_rate,
+        learning_rate=5e-5,  # Slightly lower learning rate for more stable training
         lr_scheduler_type="cosine",
-        per_device_train_batch_size=wandb.config.batch_size,    # Any higher batch size / num_generations will run out of memory on an A100.
+        per_device_train_batch_size=8,  # Increased batch size for A100. Reduce if you encounter OOM errors.
         num_generations=8,
-        gradient_accumulation_steps=wandb.config.gradient_accumulation_steps,
-        num_train_epochs=wandb.config.num_epochs,
-        max_completion_length=wandb.config.max_completion_length,
-        temperature=wandb.config.temperature,
-        logging_steps=wandb.config.logging_steps,
-        # save_steps=wandb.config.save_steps,
-        # eval_steps=wandb.config.eval_steps,
-        # save_total_limit=3,
-        # remove_unused_columns=False,
-        # hub_model_id="bcsandlund/math-24-game-1",
-        # push_to_hub=True,
+        gradient_accumulation_steps=1,  # Effective batch size of 8
+        num_train_epochs=1,
+        max_completion_length=1500,
+        temperature=0.7,
+        logging_steps=1,
         report_to="wandb",
         gradient_checkpointing=True,        # Ran out of memory on an A100 without this.
-        # dataloader_drop_last=True,
-        # eval_strategy="steps",
-        # save_strategy="steps",
-        warmup_steps=wandb.config.warmup_steps,
+        warmup_steps=5,  # ~10% of total steps
         bf16=True,
     )
 
@@ -449,15 +415,19 @@ def train():
         eval_dataset=eval_dataset,
     )
 
+    print("Running initial evaluation before training...")
+    initial_eval_results = trainer.evaluate()
+    print(f"Initial eval results: {initial_eval_results}")
+
     print("Starting GRPO training...")
     trainer.train()
 
     print("Pushing model to Hugging Face Hub...")
     trainer.model.push_to_hub(f"bcsandlund/{experiment_name}")
 
-    print("Training completed! Running evaluation...")
-    eval_results = trainer.evaluate()
-    print(f"Eval results: {eval_results}")
+    print("Training completed! Running final evaluation...")
+    final_eval_results = trainer.evaluate()
+    print(f"Final eval results: {final_eval_results}")
 
     wandb.finish()
 
