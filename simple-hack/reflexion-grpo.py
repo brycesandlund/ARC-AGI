@@ -67,9 +67,9 @@ class GRPOTrainer:
             # Pure GRPO without clipping
             pg_loss = -(ratio * advantages).mean()
         
-        # Proper KL divergence: D_KL(π_new || π_old) = E[log(π_new) - log(π_old)]
-        # This is forward KL from new policy to old policy
-        kl_loss = (new_logp - old_logp).mean()
+        # Proper KL divergence: D_KL(π_old || π_new) = E[log(π_old) - log(π_new)]
+        # This is reverse KL from old policy to new policy (standard in PPO/GRPO)
+        kl_loss = (old_logp - new_logp).mean()
         
         return pg_loss + self.kl_coef * kl_loss
 
@@ -393,7 +393,7 @@ def main():
         
         # Compute old_logp ONCE from current policy
         with torch.no_grad():
-            model.eval()
+            # Keep model in train mode to match new_logp computation
             outputs = model(input_ids.to(trainer.device))
             logits = outputs.logits[:, :-1, :]  # exclude final position
             target_actions = actions[:, 1:].to(trainer.device)  # actions correspond to next-tokens
