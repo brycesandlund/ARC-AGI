@@ -107,8 +107,12 @@ class GRPOTrainer:
             # Use provided old_logp from original policy
             old_logp = old_logp.to(self.device)
 
-        # Compute advantages with proper normalization (mean=0, std=1)
-        advantages = rewards.unsqueeze(-1).expand_as(old_logp)
+        # Compute advantages with sequence length normalization (mean=0, std=1)
+        # Normalize rewards by sequence length first
+        seq_lengths = (target_actions != 0).sum(dim=1).float().clamp(min=1.0)  # Assume 0 is pad token
+        normalized_rewards = rewards / seq_lengths
+        
+        advantages = normalized_rewards.unsqueeze(-1).expand_as(old_logp)
         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
         # New log-probabilities for gradient flow

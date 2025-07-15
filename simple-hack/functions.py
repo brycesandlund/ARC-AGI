@@ -288,7 +288,7 @@ def math_reward_func(completions, prompts, **kwargs):
         
         # Penalize completions that are clearly unfinished (unclosed <think> tag)
         if '<think>' in completion and '</think>' not in completion:
-            reward = -1.0
+            reward = 0.0
             
         print("\n-----")
         print(f"Prompt: {prompt}")
