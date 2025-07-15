@@ -6,6 +6,9 @@ import torch
 from torch.nn import functional as F
 from transformers import AutoTokenizer, AutoModelForCausalLM, AutoConfig
 from peft import LoraConfig, get_peft_model
+import wandb
+from trl import GRPOTrainer as TRLGRPOTrainer, GRPOConfig
+from datasets import Dataset
 
 # Import math problem generation and reward functions
 from functions import generate_math_problems, math_reward_func, parse_completion
@@ -191,6 +194,32 @@ def sample_math_batch(model, tokenizer, batch_size: int = 4, max_new_tokens: int
     return input_ids, actions, rewards
 
 
+def evaluate_with_trl(model, tokenizer, eval_dataset):
+    """Use TRL's GRPOTrainer.evaluate() for proper evaluation metrics."""
+    
+    # Create minimal GRPO config just for evaluation
+    grpo_config = GRPOConfig(
+        output_dir="./eval_temp",
+        per_device_eval_batch_size=4,
+        max_completion_length=512,
+        temperature=0.7,
+        bf16=torch.cuda.is_available(),
+        report_to=None,  # Disable logging for eval
+    )
+    
+    # Create TRL trainer instance with trained model
+    trainer = TRLGRPOTrainer(
+        model=model,
+        args=grpo_config,
+        processing_class=tokenizer,
+        reward_funcs=[math_reward_func],
+        eval_dataset=eval_dataset,
+    )
+    
+    # Use TRL's built-in evaluation
+    return trainer.evaluate()
+
+
 # ---------------------------------------------------------------------------
 # Main training loop
 # ---------------------------------------------------------------------------
@@ -218,7 +247,21 @@ def main():
     parser.add_argument("--lora_alpha", type=int, default=32, help="LoRA alpha scaling parameter")
     parser.add_argument("--lora_dropout", type=float, default=0.1, help="LoRA dropout")
     
+    # Wandb and evaluation configuration
+    parser.add_argument("--use_wandb", action="store_true", help="Use Weights & Biases for logging")
+    parser.add_argument("--wandb_project", type=str, default="grpo-math-training", help="W&B project name")
+    parser.add_argument("--wandb_run_name", type=str, default="custom-grpo", help="W&B run name")
+    parser.add_argument("--eval_size", type=int, default=30, help="Number of problems for evaluation")
+    
     args = parser.parse_args()
+
+    # Initialize wandb if requested
+    if args.use_wandb:
+        wandb.init(
+            project=args.wandb_project,
+            name=args.wandb_run_name,
+            config=vars(args)  # Log all hyperparameters
+        )
 
     # Load model & tokenizer (trust_remote_code required for Qwen series)
     tokenizer = AutoTokenizer.from_pretrained(args.model_name, trust_remote_code=True)
@@ -260,12 +303,39 @@ def main():
         print("Using LoRA for parameter-efficient fine-tuning.")
     else:
         print("Training full model. Consider using --use_lora for better memory efficiency.")
+    
+    # Create eval dataset once for reuse
+    print(f"Creating evaluation dataset with {args.eval_size} problems...")
+    eval_dataset = Dataset.from_generator(
+        generate_math_problems, 
+        gen_kwargs={"tokenizer": tokenizer, "dataset_size": args.eval_size}
+    )
+    
+    # Initial evaluation
+    print("Running initial evaluation...")
+    initial_metrics = evaluate_with_trl(model, tokenizer, eval_dataset)
+    print(f"Initial metrics: {initial_metrics}")
+
+    if args.use_wandb:
+        wandb.log({
+            "initial_eval/success_rate": initial_metrics.get("eval_success_rate", 0),
+            "initial_eval/reward_mean": initial_metrics.get("eval_reward_mean", 0),
+            "episode": 0
+        })
+
     total_steps = 0
+    training_rewards = []
     
     for episode in range(1, args.steps // args.epochs_per_batch + 1):
         # Sample once (expensive)
         batch = sample_math_batch(model, tokenizer, batch_size=args.batch_size, max_new_tokens=args.max_new_tokens)
         input_ids, actions, rewards = batch
+        
+        # Track batch rewards
+        batch_reward_mean = rewards.mean().item()
+        batch_reward_max = rewards.max().item()
+        batch_success_rate = (rewards > 0).float().mean().item()
+        training_rewards.extend(rewards.tolist())
         
         # Compute old_logp ONCE from current policy
         with torch.no_grad():
@@ -276,20 +346,57 @@ def main():
             old_logp = trainer._old_log_probs(logits, target_actions)
         
         # Take multiple optimization steps using same old_logp
+        episode_losses = []
+        episode_kls = []
+        
         for epoch in range(args.epochs_per_batch):
             total_steps += 1
             metrics = trainer.step(input_ids, actions, rewards, old_logp)
+            episode_losses.append(metrics['loss'])
+            episode_kls.append(metrics['approx_kl'])
+            
+            # Log training metrics
+            if args.use_wandb:
+                wandb.log({
+                    "train/loss": metrics['loss'],
+                    "train/kl_divergence": metrics['approx_kl'],
+                    "train/batch_reward_mean": batch_reward_mean,
+                    "train/batch_reward_max": batch_reward_max,
+                    "train/batch_success_rate": batch_success_rate,
+                    "episode": episode,
+                    "step": total_steps
+                })
             
             print(
                 f"Episode {episode:04d}, Epoch {epoch+1:02d}/{args.epochs_per_batch} | "
                 f"loss: {metrics['loss']:.4f} | "
-                f"approx_kl: {metrics['approx_kl']:.4f}"
+                f"kl: {metrics['approx_kl']:.4f} | "
+                f"reward: {batch_reward_mean:.3f} | "
+                f"success: {batch_success_rate:.1%}"
             )
             
             # Early stopping if KL divergence gets too high
             if metrics['approx_kl'] > 0.02:
                 print(f"  Early stopping due to high KL divergence: {metrics['approx_kl']:.4f}")
                 break
+
+    # Final evaluation
+    print("\nRunning final evaluation...")
+    final_metrics = evaluate_with_trl(model, tokenizer, eval_dataset)
+    print(f"Final metrics: {final_metrics}")
+
+    if args.use_wandb:
+        wandb.log({
+            "final_eval/success_rate": final_metrics.get("eval_success_rate", 0),
+            "final_eval/reward_mean": final_metrics.get("eval_reward_mean", 0),
+            "episode": episode
+        })
+        
+        # Log training summary
+        if wandb.run is not None:
+            wandb.run.summary["total_steps"] = total_steps
+            wandb.run.summary["final_success_rate"] = final_metrics.get("eval_success_rate", 0)
+            wandb.run.summary["improvement"] = final_metrics.get("eval_success_rate", 0) - initial_metrics.get("eval_success_rate", 0)
 
     print("Training complete!")
     
@@ -300,6 +407,9 @@ def main():
         print(f"LoRA adapters saved to ./lora_adapters_grpo_math")
     else:
         print("To save full model, use: model.save_pretrained('./saved_model')")
+    
+    if args.use_wandb:
+        wandb.finish()
 
 
 if __name__ == "__main__":
