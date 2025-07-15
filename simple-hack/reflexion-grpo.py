@@ -26,12 +26,15 @@ class GRPOTrainer:
     def __init__(
         self,
         model: torch.nn.Module,
+        ref_model: torch.nn.Module,
         lr: float = 1e-5,
         clip_ratio: float = 0.2,
         kl_coef: float = 0.01,
         device: str = "cuda" if torch.cuda.is_available() else "cpu",
     ) -> None:
         self.model = model.to(device)
+        self.ref_model = ref_model.to(device)
+        self.ref_model.eval()
         self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=lr)
         self.clip_ratio = clip_ratio
         self.kl_coef = kl_coef
@@ -46,6 +49,7 @@ class GRPOTrainer:
         self,
         new_logp: torch.Tensor,
         old_logp: torch.Tensor,
+        ref_logp: torch.Tensor,
         advantages: torch.Tensor,
     ) -> torch.Tensor:
         """Core GRPO objective.
@@ -53,7 +57,7 @@ class GRPOTrainer:
         GRPO uses a more direct policy gradient approach with proper KL regularization.
         Unlike PPO which clips ratios, GRPO relies on KL penalty for stability.
         """
-        # Compute probability ratio (pi_new / pi_old)
+        # Compute probability ratio (pi_new / pi_old) for the policy gradient loss
         ratio = torch.exp(new_logp - old_logp)
         
         # Optional clipping for stability (can be disabled by setting clip_ratio <= 0)
@@ -69,9 +73,11 @@ class GRPOTrainer:
             # Pure GRPO without clipping
             pg_loss = -(ratio * advantages).mean()
         
-        # Proper KL divergence: D_KL(π_old || π_new) = E[log(π_old) - log(π_new)]
-        # This is reverse KL from old policy to new policy (standard in PPO/GRPO)
-        kl_loss = (old_logp - new_logp).mean()
+        # KL divergence loss against the reference model.
+        # D_KL(π_theta || π_ref) estimated with (r - log(r) - 1) where r = π_ref / π_theta.
+        log_ratio_ref = ref_logp - new_logp
+        ratio_ref = torch.exp(log_ratio_ref)
+        kl_loss = (ratio_ref - log_ratio_ref - 1).mean()
         
         return pg_loss + self.kl_coef * kl_loss
 
@@ -101,6 +107,12 @@ class GRPOTrainer:
         logits = outputs.logits[:, :-1, :]  # exclude final position (no next-token)
         target_actions = actions[:, 1:]      # actions correspond to next-tokens
 
+        # Get log-probs from the reference model
+        with torch.no_grad():
+            ref_outputs = self.ref_model(input_ids)
+            ref_logits = ref_outputs.logits[:, :-1, :]
+            ref_logp = self._old_log_probs(ref_logits, target_actions)
+
         # Compute old log-probabilities (detach from graph)
         if old_logp is None:
             # First time - compute from current policy
@@ -121,7 +133,7 @@ class GRPOTrainer:
         new_logp = self._old_log_probs(logits, target_actions)
 
         # Compute GRPO loss
-        loss = self._policy_loss(new_logp, old_logp, advantages)
+        loss = self._policy_loss(new_logp, old_logp, ref_logp, advantages)
 
         # Optimise
         self.optimizer.zero_grad()
@@ -339,8 +351,15 @@ def main():
         model = get_peft_model(model, lora_config)
         model.print_trainable_parameters()
 
+    # Load a reference model for KL divergence estimation
+    # This is a placeholder. In a real scenario, you'd load a pre-trained model.
+    # For now, we'll use the same model as the policy model.
+    ref_model = model.clone() # Clone the model to create a reference
+    ref_model.eval()
+
     trainer = GRPOTrainer(
         model,
+        ref_model, # Pass the reference model
         lr=args.lr,
         clip_ratio=args.clip_ratio,
         kl_coef=args.kl_coef,
