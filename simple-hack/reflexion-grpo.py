@@ -7,7 +7,7 @@ from torch.nn import functional as F
 from transformers import AutoTokenizer, AutoModelForCausalLM, AutoConfig
 from peft import LoraConfig, get_peft_model
 import wandb
-from trl import GRPOTrainer as TRLGRPOTrainer, GRPOConfig
+
 from datasets import Dataset
 
 # Import math problem generation and reward functions
@@ -194,30 +194,57 @@ def sample_math_batch(model, tokenizer, batch_size: int = 4, max_new_tokens: int
     return input_ids, actions, rewards
 
 
-def evaluate_with_trl(model, tokenizer, eval_dataset):
-    """Use TRL's GRPOTrainer.evaluate() for proper evaluation metrics."""
+def evaluate_model(model, tokenizer, eval_dataset, max_new_tokens=512):
+    """Simple evaluation function that generates completions and calculates rewards."""
     
-    # Create minimal GRPO config just for evaluation
-    grpo_config = GRPOConfig(
-        output_dir="./eval_temp",
-        per_device_eval_batch_size=4,
-        max_completion_length=512,
-        temperature=0.7,
-        bf16=torch.cuda.is_available(),
-        report_to=None,  # Disable logging for eval
-    )
+    model.eval()
+    total_reward = 0.0
+    total_samples = 0
+    success_count = 0
     
-    # Create TRL trainer instance with trained model
-    trainer = TRLGRPOTrainer(
-        model=model,
-        args=grpo_config,
-        processing_class=tokenizer,
-        reward_funcs=[math_reward_func],
-        eval_dataset=eval_dataset,
-    )
+    # Process evaluation dataset
+    for sample in eval_dataset:
+        prompt = sample["query"]
+        target = sample["target"]
+        
+        # Tokenize the prompt
+        inputs = tokenizer(prompt, return_tensors="pt", padding=True, truncation=True)
+        
+        # Generate completion
+        with torch.no_grad():
+            generated = model.generate(
+                input_ids=inputs["input_ids"].to(model.device),
+                attention_mask=inputs["attention_mask"].to(model.device),
+                max_new_tokens=max_new_tokens,
+                temperature=0.7,
+                do_sample=True,
+                pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id,
+                repetition_penalty=1.1
+            )
+        
+        # Extract only the generated part
+        prompt_length = inputs["input_ids"].shape[1]
+        generated_tokens = generated[:, prompt_length:]
+        completion = tokenizer.decode(generated_tokens[0], skip_special_tokens=True)
+        
+        # Calculate reward
+        rewards = math_reward_func([completion], [prompt])
+        reward = rewards[0]
+        
+        total_reward += reward
+        total_samples += 1
+        if reward > 0:
+            success_count += 1
     
-    # Use TRL's built-in evaluation
-    return trainer.evaluate()
+    # Calculate metrics
+    avg_reward = total_reward / total_samples if total_samples > 0 else 0.0
+    success_rate = success_count / total_samples if total_samples > 0 else 0.0
+    
+    return {
+        "eval_reward_mean": avg_reward,
+        "eval_success_rate": success_rate,
+        "eval_samples": total_samples
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -242,16 +269,16 @@ def main():
     parser.add_argument("--epochs_per_batch", type=int, default=4, help="Number of optimization steps per batch")
     
     # LoRA configuration
-    parser.add_argument("--use_lora", action="store_true", help="Use LoRA for parameter-efficient fine-tuning")
+    parser.add_argument("--use_lora", action="store_true", default=True, help="Use LoRA for parameter-efficient fine-tuning")
     parser.add_argument("--lora_r", type=int, default=16, help="LoRA rank")
     parser.add_argument("--lora_alpha", type=int, default=32, help="LoRA alpha scaling parameter")
     parser.add_argument("--lora_dropout", type=float, default=0.1, help="LoRA dropout")
     
     # Wandb and evaluation configuration
-    parser.add_argument("--use_wandb", action="store_true", help="Use Weights & Biases for logging")
+    parser.add_argument("--use_wandb", action="store_true", default=True, help="Use Weights & Biases for logging")
     parser.add_argument("--wandb_project", type=str, default="grpo-math-training", help="W&B project name")
     parser.add_argument("--wandb_run_name", type=str, default="custom-grpo", help="W&B run name")
-    parser.add_argument("--eval_size", type=int, default=30, help="Number of problems for evaluation")
+    parser.add_argument("--eval_size", type=int, default=10, help="Number of problems for evaluation")
     
     args = parser.parse_args()
 
@@ -277,7 +304,7 @@ def main():
         trust_remote_code=True,
     )
 
-    # Apply LoRA if requested
+    # Apply LoRA by default (unless disabled)
     if args.use_lora:
         print("Applying LoRA for parameter-efficient fine-tuning...")
         lora_config = LoraConfig(
@@ -306,14 +333,22 @@ def main():
     
     # Create eval dataset once for reuse
     print(f"Creating evaluation dataset with {args.eval_size} problems...")
-    eval_dataset = Dataset.from_generator(
-        generate_math_problems, 
-        gen_kwargs={"tokenizer": tokenizer, "dataset_size": args.eval_size}
-    )
+    
+    # Generate data for evaluation
+    eval_data = []
+    problem_generator = generate_math_problems(tokenizer, args.eval_size)
+    for problem in problem_generator:
+        eval_data.append({
+            "query": problem["prompt"],
+            "target": problem["target"],
+            "numbers": problem["numbers"]
+        })
+    
+    eval_dataset = Dataset.from_list(eval_data)
     
     # Initial evaluation
     print("Running initial evaluation...")
-    initial_metrics = evaluate_with_trl(model, tokenizer, eval_dataset)
+    initial_metrics = evaluate_model(model, tokenizer, eval_dataset, args.max_new_tokens)
     print(f"Initial metrics: {initial_metrics}")
 
     if args.use_wandb:
@@ -382,7 +417,7 @@ def main():
 
     # Final evaluation
     print("\nRunning final evaluation...")
-    final_metrics = evaluate_with_trl(model, tokenizer, eval_dataset)
+    final_metrics = evaluate_model(model, tokenizer, eval_dataset, args.max_new_tokens)
     print(f"Final metrics: {final_metrics}")
 
     if args.use_wandb:
