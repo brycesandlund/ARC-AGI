@@ -1,6 +1,7 @@
 import argparse
 import math
 from typing import List, Dict, Any, Optional
+import copy
 
 import torch
 from torch.nn import functional as F
@@ -329,7 +330,7 @@ def main():
     tokenizer.padding_side = 'left'
     
     config = AutoConfig.from_pretrained(args.model_name, trust_remote_code=True)
-    model = AutoModelForCausalLM.from_pretrained(
+    base_model = AutoModelForCausalLM.from_pretrained(
         args.model_name,
         config=config,
         torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
@@ -348,18 +349,19 @@ def main():
             bias="none",
             task_type="CAUSAL_LM"
         )
-        model = get_peft_model(model, lora_config)
+        model = get_peft_model(base_model, lora_config)
         model.print_trainable_parameters()
-
-    # Load a reference model for KL divergence estimation
-    # This is a placeholder. In a real scenario, you'd load a pre-trained model.
-    # For now, we'll use the same model as the policy model.
-    ref_model = model.clone() # Clone the model to create a reference
-    ref_model.eval()
+        # With LoRA, the reference model is the frozen base model
+        ref_model = base_model
+    else:
+        print("Training full model. This will consume more memory.")
+        model = base_model
+        # Without LoRA, we must create a deep copy for the reference model
+        ref_model = copy.deepcopy(model)
 
     trainer = GRPOTrainer(
         model,
-        ref_model, # Pass the reference model
+        ref_model=ref_model,
         lr=args.lr,
         clip_ratio=args.clip_ratio,
         kl_coef=args.kl_coef,
