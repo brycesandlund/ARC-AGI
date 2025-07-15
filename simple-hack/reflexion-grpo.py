@@ -49,18 +49,28 @@ class GRPOTrainer:
         advantages: torch.Tensor,
     ) -> torch.Tensor:
         """Core GRPO objective.
-
-        Unlike PPO which clips the probability ratio, GRPO directly penalises
-        the KL divergence while leaving the ratio un-clipped. This
-        implementation keeps an optional PPO-style clip for stability that can
-        be disabled by setting `clip_ratio <= 0.`"""
+        
+        GRPO uses a more direct policy gradient approach with proper KL regularization.
+        Unlike PPO which clips ratios, GRPO relies on KL penalty for stability.
+        """
+        # Compute probability ratio (pi_new / pi_old)
         ratio = torch.exp(new_logp - old_logp)
+        
+        # Optional clipping for stability (can be disabled by setting clip_ratio <= 0)
         if self.clip_ratio > 0:
-            ratio = torch.clamp(ratio, 1.0 - self.clip_ratio, 1.0 + self.clip_ratio)
-        # Policy gradient loss (reinforce)
-        pg_loss = -(ratio * advantages).mean()
-        # KL regularisation (old -> new)
-        kl_loss = (old_logp - new_logp).mean()
+            clipped_ratio = torch.clamp(ratio, 1.0 - self.clip_ratio, 1.0 + self.clip_ratio)
+            # Use the minimum of clipped and unclipped objectives
+            pg_loss1 = -(ratio * advantages)
+            pg_loss2 = -(clipped_ratio * advantages)
+            pg_loss = torch.min(pg_loss1, pg_loss2).mean()
+        else:
+            # Pure GRPO without clipping
+            pg_loss = -(ratio * advantages).mean()
+        
+        # Proper KL divergence: D_KL(π_new || π_old) = E[log(π_new) - log(π_old)]
+        # This is forward KL from new policy to old policy
+        kl_loss = (new_logp - old_logp).mean()
+        
         return pg_loss + self.kl_coef * kl_loss
 
     def step(
