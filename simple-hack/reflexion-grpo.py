@@ -59,10 +59,12 @@ class GRPOTrainer:
         # Optional clipping for stability (can be disabled by setting clip_ratio <= 0)
         if self.clip_ratio > 0:
             clipped_ratio = torch.clamp(ratio, 1.0 - self.clip_ratio, 1.0 + self.clip_ratio)
-            # Use the minimum of clipped and unclipped objectives
+            # The PPO objective is min(ratio * advantages, clipped_ratio * advantages).
+            # We are minimizing the negative of this objective, which is equivalent to
+            # max(-(ratio * advantages), -(clipped_ratio * advantages)).
             pg_loss1 = -(ratio * advantages)
             pg_loss2 = -(clipped_ratio * advantages)
-            pg_loss = torch.min(pg_loss1, pg_loss2).mean()
+            pg_loss = torch.max(pg_loss1, pg_loss2).mean()
         else:
             # Pure GRPO without clipping
             pg_loss = -(ratio * advantages).mean()
@@ -276,7 +278,7 @@ def main():
         default="Qwen/Qwen3-1.7B",
         help="HuggingFace model identifier.",
     )
-    parser.add_argument("--lr", type=float, default=1e-5, help="Learning rate")
+    parser.add_argument("--lr", type=float, default=3e-5, help="Learning rate")
     parser.add_argument("--steps", type=int, default=10, help="Number of optimisation steps")
     parser.add_argument("--batch_size", type=int, default=4, help="Batch size (can be increased with LoRA)")
     parser.add_argument("--clip_ratio", type=float, default=0.2, help="PPO-style clip ratio")
@@ -384,6 +386,9 @@ def main():
         # Sample once (expensive)
         batch = sample_math_batch(model, tokenizer, batch_size=args.batch_size, max_new_tokens=args.max_new_tokens)
         input_ids, actions, rewards = batch
+        
+        # Set the model back to train mode before computing old_logp
+        model.train()
         
         # Track batch rewards
         batch_reward_mean = rewards.mean().item()
