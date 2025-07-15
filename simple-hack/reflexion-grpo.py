@@ -145,8 +145,8 @@ def sample_math_batch(model, tokenizer, batch_size: int = 4, max_new_tokens: int
     model.eval()
     with torch.no_grad():
         generated = model.generate(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
+            input_ids=input_ids.to(model.device),
+            attention_mask=attention_mask.to(model.device),
             max_new_tokens=max_new_tokens,
             temperature=0.7,
             do_sample=True,
@@ -165,6 +165,8 @@ def sample_math_batch(model, tokenizer, batch_size: int = 4, max_new_tokens: int
     rewards = torch.tensor(math_reward_func(completions, prompts), dtype=torch.float32)
     
     # Concatenate input_ids and generated_tokens for full sequences
+    # Move input_ids to the same device as generated_tokens
+    input_ids = input_ids.to(generated.device)
     full_sequences = torch.cat([input_ids, generated_tokens], dim=1)
     
     # For GRPO, actions are the full sequences (including prompt + completion)
@@ -294,6 +296,9 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(args.model_name, trust_remote_code=True)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
+    
+    # Set padding side to 'left' for decoder-only models
+    tokenizer.padding_side = 'left'
     
     config = AutoConfig.from_pretrained(args.model_name, trust_remote_code=True)
     model = AutoModelForCausalLM.from_pretrained(
