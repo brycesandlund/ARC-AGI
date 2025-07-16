@@ -32,6 +32,7 @@ class GRPOTrainer:
         clip_ratio: float = 0.2,
         kl_coef: float = 0.01,
         device: str = "cuda" if torch.cuda.is_available() else "cpu",
+        dr: bool = True,
     ) -> None:
         self.model = model.to(device)
         self.ref_model = ref_model.to(device)
@@ -40,6 +41,7 @@ class GRPOTrainer:
         self.clip_ratio = clip_ratio
         self.kl_coef = kl_coef
         self.device = device
+        self.dr = dr
 
     def _old_log_probs(self, logits: torch.Tensor, actions: torch.Tensor) -> torch.Tensor:
         """Return log-probabilities of `actions` under the policy that produced `logits`."""
@@ -112,13 +114,17 @@ class GRPOTrainer:
             # Use provided old_logp from original policy
             old_logp = old_logp.to(self.device)
 
-        # Compute advantages with sequence length normalization (mean=0, std=1)
-        # Normalize rewards by sequence length first
-        seq_lengths = (target_actions != 0).sum(dim=1).float().clamp(min=1.0)  # Assume 0 is pad token
-        normalized_rewards = rewards / seq_lengths
-        
-        advantages = normalized_rewards.unsqueeze(-1).expand_as(old_logp)
-        advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+        # Compute advantages with optional sequence length normalization and standardization
+        if self.dr:
+            # Skip length normalization and std normalization when dr=True
+            advantages = rewards.unsqueeze(-1).expand_as(old_logp)
+            advantages = advantages - advantages.mean()  # Only center, don't normalize std
+        else:
+            # Apply full normalization (length + std) when dr=False
+            seq_lengths = (target_actions != 0).sum(dim=1).float().clamp(min=1.0)  # Assume 0 is pad token
+            normalized_rewards = rewards / seq_lengths
+            advantages = normalized_rewards.unsqueeze(-1).expand_as(old_logp)
+            advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
         # New log-probabilities for gradient flow
         new_logp = self._old_log_probs(logits, target_actions)
@@ -305,6 +311,9 @@ def main():
     parser.add_argument("--wandb_run_name", type=str, default="custom-grpo", help="W&B run name")
     parser.add_argument("--eval_size", type=int, default=10, help="Number of problems for evaluation")
     
+    # Reward normalization configuration
+    parser.add_argument("--dr", action="store_true", default=True, help="Disable reward normalization (skip length normalization and std division)")
+    
     args = parser.parse_args()
 
     # Initialize wandb if requested
@@ -364,6 +373,7 @@ def main():
         lr=args.lr,
         clip_ratio=args.clip_ratio,
         kl_coef=args.kl_coef,
+        dr=args.dr,
     )
 
     print("Starting GRPO fine-tuning with math problems …")
