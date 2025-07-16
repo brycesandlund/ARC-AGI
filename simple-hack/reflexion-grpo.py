@@ -148,11 +148,12 @@ class GRPOTrainer:
 def sample_math_batch(model, tokenizer, batch_size: int = 4, max_new_tokens: int = 512):
     """Generate a batch of math problems and model completions for GRPO training."""
     
-    # Generate math problems
-    problem_generator = generate_math_problems(tokenizer, batch_size)
-    problems = [next(problem_generator) for _ in range(batch_size)]
+    # Generate one math problem and use it for all batch elements
+    problem_generator = generate_math_problems(tokenizer, 1)
+    single_problem = next(problem_generator)
+    problems = [single_problem for _ in range(batch_size)]
     
-    # Extract prompts
+    # Extract prompts (all the same now)
     prompts = [problem["prompt"] for problem in problems]
     
     # Tokenize prompts
