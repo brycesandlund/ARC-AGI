@@ -256,6 +256,61 @@ def generate_math_problems(tokenizer, dataset_size):
                 "numbers": numbers
             }
 
+def extract_numbers_from_expression(expression):
+    """
+    Extracts all numbers from a mathematical expression.
+    
+    Args:
+        expression (str): Mathematical expression
+        
+    Returns:
+        list: List of numbers found in the expression
+    """
+    # Remove all non-digit, non-decimal point, and non-space characters
+    # Keep only numbers and spaces
+    import re
+    
+    # Find all numbers (integers and decimals) in the expression
+    numbers = re.findall(r'\d+(?:\.\d+)?', expression)
+    
+    # Convert to integers (assuming we're working with integers based on the problem setup)
+    return [int(float(num)) for num in numbers]
+
+def extract_numbers_from_prompt(prompt):
+    """
+    Extracts the list of numbers from the prompt.
+    
+    Args:
+        prompt (str): The prompt containing the numbers
+        
+    Returns:
+        list: List of numbers specified in the prompt
+    """
+    # Look for pattern "Using the numbers X, Y, Z, ..." in the prompt
+    match = re.search(r'Using the numbers ([\d,\s]+)', prompt)
+    
+    if match:
+        numbers_str = match.group(1)
+        # Split by comma and convert to integers
+        numbers = [int(num.strip()) for num in numbers_str.split(',')]
+        return numbers
+    
+    return []
+
+def numbers_match(prompt_numbers, expression_numbers):
+    """
+    Checks if the numbers used in the expression exactly match those specified in the prompt.
+    
+    Args:
+        prompt_numbers (list): Numbers specified in the prompt
+        expression_numbers (list): Numbers extracted from the expression
+        
+    Returns:
+        bool: True if numbers match exactly (same numbers, same frequency)
+    """
+    # Sort both lists and compare
+    return sorted(prompt_numbers) == sorted(expression_numbers)
+
 def math_reward_func(completions, prompts, **kwargs):
     """
     Reward function that evaluates mathematical correctness using is_correct.
@@ -278,13 +333,28 @@ def math_reward_func(completions, prompts, **kwargs):
         # Clean the completion and check if it's correct
         _, content = parse_completion(completion)
 
+        reward = 0.0  # Default to 0
+        
         if target_match:
             target = float(target_match.group(1))
+            
+            # Extract numbers from prompt and expression
+            prompt_numbers = extract_numbers_from_prompt(prompt)
+            expression_numbers = extract_numbers_from_expression(content)
+            
+            # Check both mathematical correctness and number usage
             is_correct_answer = is_correct(content, target)
-            reward = 1.0 if is_correct_answer else 0.0
-        else:
-            # If we can't extract target, give low reward
-            reward = 0.0
+            numbers_are_correct = numbers_match(prompt_numbers, expression_numbers)
+            
+            # Only give full reward if both conditions are met
+            if is_correct_answer and numbers_are_correct:
+                reward = 1.0
+            elif is_correct_answer and not numbers_are_correct:
+                reward = 0.0  # Wrong numbers used
+            elif not is_correct_answer and numbers_are_correct:
+                reward = 0.0  # Right numbers but wrong result
+            else:
+                reward = 0.0  # Both wrong
         
         # Penalize completions that are clearly unfinished (unclosed <think> tag)
         if '<think>' in completion and '</think>' not in completion:
@@ -294,6 +364,9 @@ def math_reward_func(completions, prompts, **kwargs):
         print(f"Prompt: {prompt}")
         print(f"Completion: {completion}")
         print(f"Parsed Content: {content}")
+        print(f"Prompt Numbers: {extract_numbers_from_prompt(prompt) if target_match else 'N/A'}")
+        print(f"Expression Numbers: {extract_numbers_from_expression(content) if target_match else 'N/A'}")
+        print(f"Numbers Match: {numbers_match(extract_numbers_from_prompt(prompt), extract_numbers_from_expression(content)) if target_match else 'N/A'}")
         print(f"Reward: {reward}")
         print("-----")
             
@@ -306,17 +379,23 @@ def test_reward():
     Test the reward function with some sample completions and prompts
     """
     test_completions = [
-        "(4 + 4) * 3",  # Should be correct for target 24
-        "4 + 4 + 3",    # Should be incorrect for target 24
-        "10 * 2asdf",    # Should be correct for target 24
-        "(8 × (4 − 2)) + 8", # Target 24
+        "(4 + 4) * 3",      # Should be incorrect: right math (24) but wrong numbers (uses 3, 3, 4, 4 but expression has only one 3)
+        "4 * 4 + 3 + 3",    # Should be correct: right math (24) and right numbers (3, 3, 4, 4)
+        "4 + 4 + 3",        # Should be incorrect: wrong math (11) but uses some right numbers
+        "10 * 2 + 4",       # Should be incorrect: right math (24) but wrong numbers (missing one 4, has 10 instead of specified numbers)
+        "10 + 4 + 4 + 5 + 1", # Should be incorrect: right math (24) but wrong numbers (uses 5 numbers instead of 4)
+        "(8 * (4 - 2)) + 8", # Should be correct: right math (24) and right numbers (8, 4, 2, 8)
+        "6 * 4",            # Should be incorrect: right math (24) but completely wrong numbers
     ]
     
     test_prompts = [
-        "Using the numbers 4, 4, 3, 3 exactly once in mathematical notation using addition, subtraction, multiplication, division, and parentheses, create an expression that equals 24.",
-        "Using the numbers 4, 4, 3, 3 exactly once in mathematical notation using addition, subtraction, multiplication, division, and parentheses, create an expression that equals 24.",
+        "Using the numbers 3, 3, 4, 4 exactly once in mathematical notation using addition, subtraction, multiplication, division, and parentheses, create an expression that equals 24.",
+        "Using the numbers 3, 3, 4, 4 exactly once in mathematical notation using addition, subtraction, multiplication, division, and parentheses, create an expression that equals 24.", 
+        "Using the numbers 3, 3, 4, 4 exactly once in mathematical notation using addition, subtraction, multiplication, division, and parentheses, create an expression that equals 24.",
         "Using the numbers 10, 2, 4, 4 exactly once in mathematical notation using addition, subtraction, multiplication, division, and parentheses, create an expression that equals 24.",
+        "Using the numbers 10, 4, 4, 5 exactly once in mathematical notation using addition, subtraction, multiplication, division, and parentheses, create an expression that equals 24.",
         "Using the numbers 8, 4, 2, 8 exactly once in mathematical notation using addition, subtraction, multiplication, division, and parentheses, create an expression that equals 24.",
+        "Using the numbers 1, 2, 3, 4 exactly once in mathematical notation using addition, subtraction, multiplication, division, and parentheses, create an expression that equals 24.",
     ]
     
     rewards = math_reward_func(test_completions, test_prompts)
