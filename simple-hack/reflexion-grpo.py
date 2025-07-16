@@ -284,10 +284,10 @@ def main():
     )
     parser.add_argument("--lr", type=float, default=1e-5, help="Learning rate")
     parser.add_argument("--steps", type=int, default=10, help="Number of optimisation steps")
-    parser.add_argument("--batch_size", type=int, default=4, help="Batch size (can be increased with LoRA)")
+    parser.add_argument("--batch_size", type=int, default=8, help="Batch size (can be increased with LoRA)")
     parser.add_argument("--clip_ratio", type=float, default=0.2, help="PPO-style clip ratio")
     parser.add_argument("--kl_coef", type=float, default=0.01, help="KL penalty coefficient")
-    parser.add_argument("--max_new_tokens", type=int, default=512, help="Maximum new tokens to generate")
+    parser.add_argument("--max_new_tokens", type=int, default=1200, help="Maximum new tokens to generate")
     parser.add_argument("--epochs_per_batch", type=int, default=4, help="Number of optimization steps per batch")
     
     # LoRA configuration
@@ -295,6 +295,9 @@ def main():
     parser.add_argument("--lora_r", type=int, default=16, help="LoRA rank")
     parser.add_argument("--lora_alpha", type=int, default=32, help="LoRA alpha scaling parameter")
     parser.add_argument("--lora_dropout", type=float, default=0.1, help="LoRA dropout")
+    
+    # Memory optimization
+    parser.add_argument("--gradient_checkpointing", action="store_true", default=True, help="Enable gradient checkpointing to save memory")
     
     # Wandb and evaluation configuration
     parser.add_argument("--use_wandb", action="store_true", default=True, help="Use Weights & Biases for logging")
@@ -328,6 +331,11 @@ def main():
         device_map="auto",
         trust_remote_code=True,
     )
+
+    # Enable gradient checkpointing for memory efficiency
+    if args.gradient_checkpointing:
+        print("Enabling gradient checkpointing for memory optimization...")
+        base_model.gradient_checkpointing_enable()
 
     # Apply LoRA by default (unless disabled)
     if args.use_lora:
