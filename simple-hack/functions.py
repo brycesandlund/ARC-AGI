@@ -52,7 +52,7 @@ def is_correct(content, target):
     """
     try:
         # Clean the content by stripping whitespace and newlines
-        expression = content.strip().replace('×', '*').replace('÷', '/')
+        expression = content.strip().replace('×', '*').replace('÷', '/').replace('−', '-')
         
         # Evaluate the mathematical expression
         result = eval(expression)
@@ -308,13 +308,15 @@ def test_reward():
     test_completions = [
         "(4 + 4) * 3",  # Should be correct for target 24
         "4 + 4 + 3",    # Should be incorrect for target 24
-        "10 * 2asdf"    # Should be correct for target 24
+        "10 * 2asdf",    # Should be correct for target 24
+        "(8 × (4 − 2)) + 8", # Target 24
     ]
     
     test_prompts = [
         "Using the numbers 4, 4, 3, 3 exactly once in mathematical notation using addition, subtraction, multiplication, division, and parentheses, create an expression that equals 24.",
         "Using the numbers 4, 4, 3, 3 exactly once in mathematical notation using addition, subtraction, multiplication, division, and parentheses, create an expression that equals 24.",
-        "Using the numbers 10, 2, 4, 4 exactly once in mathematical notation using addition, subtraction, multiplication, division, and parentheses, create an expression that equals 24."
+        "Using the numbers 10, 2, 4, 4 exactly once in mathematical notation using addition, subtraction, multiplication, division, and parentheses, create an expression that equals 24.",
+        "Using the numbers 8, 4, 2, 8 exactly once in mathematical notation using addition, subtraction, multiplication, division, and parentheses, create an expression that equals 24.",
     ]
     
     rewards = math_reward_func(test_completions, test_prompts)
@@ -324,4 +326,8 @@ def test_reward():
         print(f"\nTest {i+1}:")
         print(f"  Completion: {completion}")
         print(f"  Reward: {reward}")
+
+
+if __name__ == "__main__":
+    test_reward()
 

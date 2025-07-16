@@ -46,41 +46,31 @@ class GRPOTrainer:
         log_probs = F.log_softmax(logits, dim=-1)
         return log_probs.gather(-1, actions.unsqueeze(-1)).squeeze(-1)
 
-    def _policy_loss(
+    def _pg_loss(
         self,
         new_logp: torch.Tensor,
         old_logp: torch.Tensor,
-        ref_logp: torch.Tensor,
         advantages: torch.Tensor,
     ) -> torch.Tensor:
-        """Core GRPO objective.
-        
-        GRPO uses a more direct policy gradient approach with proper KL regularization.
-        Unlike PPO which clips ratios, GRPO relies on KL penalty for stability.
-        """
-        # Compute probability ratio (pi_new / pi_old) for the policy gradient loss
+        """Computes the policy gradient loss component."""
         ratio = torch.exp(new_logp - old_logp)
-        
-        # Optional clipping for stability (can be disabled by setting clip_ratio <= 0)
         if self.clip_ratio > 0:
             clipped_ratio = torch.clamp(ratio, 1.0 - self.clip_ratio, 1.0 + self.clip_ratio)
-            # The PPO objective is min(ratio * advantages, clipped_ratio * advantages).
-            # We are minimizing the negative of this objective, which is equivalent to
-            # max(-(ratio * advantages), -(clipped_ratio * advantages)).
             pg_loss1 = -(ratio * advantages)
             pg_loss2 = -(clipped_ratio * advantages)
-            pg_loss = torch.max(pg_loss1, pg_loss2).mean()
+            return torch.max(pg_loss1, pg_loss2).mean()
         else:
-            # Pure GRPO without clipping
-            pg_loss = -(ratio * advantages).mean()
-        
-        # KL divergence loss against the reference model.
-        # D_KL(π_theta || π_ref) estimated with (r - log(r) - 1) where r = π_ref / π_theta.
+            return -(ratio * advantages).mean()
+
+    def _kl_loss(
+        self,
+        new_logp: torch.Tensor,
+        ref_logp: torch.Tensor,
+    ) -> torch.Tensor:
+        """Computes the KL divergence loss against the reference model."""
         log_ratio_ref = ref_logp - new_logp
         ratio_ref = torch.exp(log_ratio_ref)
-        kl_loss = (ratio_ref - log_ratio_ref - 1).mean()
-        
-        return pg_loss + self.kl_coef * kl_loss
+        return (ratio_ref - log_ratio_ref - 1).mean()
 
     def step(
         self,
@@ -133,8 +123,10 @@ class GRPOTrainer:
         # New log-probabilities for gradient flow
         new_logp = self._old_log_probs(logits, target_actions)
 
-        # Compute GRPO loss
-        loss = self._policy_loss(new_logp, old_logp, ref_logp, advantages)
+        # Compute loss components
+        pg_loss = self._pg_loss(new_logp, old_logp, advantages)
+        kl_loss = self._kl_loss(new_logp, ref_logp)
+        loss = pg_loss + self.kl_coef * kl_loss
 
         # Optimise
         self.optimizer.zero_grad()
@@ -142,12 +134,10 @@ class GRPOTrainer:
         torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
         self.optimizer.step()
 
-        with torch.no_grad():
-            approx_kl = (old_logp - new_logp).mean().item()
-
         return {
             "loss": loss.item(),
-            "approx_kl": approx_kl,
+            "pg_loss": pg_loss.item(),
+            "kl_loss": kl_loss.item(),
         }
 
 
@@ -291,7 +281,7 @@ def main():
         default="Qwen/Qwen3-1.7B",
         help="HuggingFace model identifier.",
     )
-    parser.add_argument("--lr", type=float, default=3e-5, help="Learning rate")
+    parser.add_argument("--lr", type=float, default=1e-5, help="Learning rate")
     parser.add_argument("--steps", type=int, default=10, help="Number of optimisation steps")
     parser.add_argument("--batch_size", type=int, default=4, help="Batch size (can be increased with LoRA)")
     parser.add_argument("--clip_ratio", type=float, default=0.2, help="PPO-style clip ratio")
@@ -433,13 +423,14 @@ def main():
             total_steps += 1
             metrics = trainer.step(input_ids, actions, rewards, old_logp)
             episode_losses.append(metrics['loss'])
-            episode_kls.append(metrics['approx_kl'])
+            episode_kls.append(metrics['kl_loss'])
             
             # Log training metrics
             if args.use_wandb:
                 wandb.log({
                     "train/loss": metrics['loss'],
-                    "train/kl_divergence": metrics['approx_kl'],
+                    "train/pg_loss": metrics['pg_loss'],
+                    "train/kl_divergence": metrics['kl_loss'],
                     "train/batch_reward_mean": batch_reward_mean,
                     "train/batch_reward_max": batch_reward_max,
                     "train/batch_success_rate": batch_success_rate,
@@ -450,14 +441,14 @@ def main():
             print(
                 f"Episode {episode:04d}, Epoch {epoch+1:02d}/{args.epochs_per_batch} | "
                 f"loss: {metrics['loss']:.4f} | "
-                f"kl: {metrics['approx_kl']:.4f} | "
+                f"kl: {metrics['kl_loss']:.4f} | "
                 f"reward: {batch_reward_mean:.3f} | "
                 f"success: {batch_success_rate:.1%}"
             )
             
             # Early stopping if KL divergence gets too high
-            if metrics['approx_kl'] > 0.02:
-                print(f"  Early stopping due to high KL divergence: {metrics['approx_kl']:.4f}")
+            if metrics['kl_loss'] > 0.02:
+                print(f"  Early stopping due to high KL divergence: {metrics['kl_loss']:.4f}")
                 break
 
     # Final evaluation
