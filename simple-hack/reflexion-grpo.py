@@ -80,6 +80,7 @@ class GRPOTrainer:
         actions: torch.Tensor,
         rewards: torch.Tensor,
         prompt_length: int,
+        pad_token_id: int,
         old_logp: Optional[torch.Tensor] = None,
     ) -> Dict[str, Any]:
         """Run a single optimisation step on a batch.
@@ -90,6 +91,7 @@ class GRPOTrainer:
         actions    : (B, G) generated tokens only
         rewards    : (B,) scalar reward for each sequence
         prompt_length : int, length of the prompt (same for all in batch)
+        pad_token_id : int, token ID used for padding
         old_logp   : (B, G) old log probabilities for generated tokens only
         """
         self.model.train()
@@ -125,7 +127,7 @@ class GRPOTrainer:
             advantages = advantages / 1000 # scale down advantages according to sequence length
         else:
             # Apply full normalization (length + std) when dr=False
-            seq_lengths = (target_actions != 0).sum(dim=1).float().clamp(min=1.0)  # Assume 0 is pad token
+            seq_lengths = (target_actions != pad_token_id).sum(dim=1).float().clamp(min=1.0)  # Use actual pad token
             normalized_rewards = rewards / seq_lengths
             advantages = normalized_rewards.unsqueeze(-1).expand_as(old_logp)
             advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
@@ -204,6 +206,9 @@ def sample_math_batch(model, tokenizer, batch_size: int = 4, max_new_tokens: int
     # Store the prompt length (same for all items in batch since we use same problem)
     prompt_length = input_ids.shape[1]
     
+    # Store the pad token ID for consistent usage
+    pad_token_id = tokenizer.pad_token_id or tokenizer.eos_token_id
+    
     # Pad sequences to same length for batch processing
     max_full_len = max(seq.shape[0] for seq in full_sequences)
     max_action_len = max(seq.shape[0] for seq in generated_tokens)
@@ -214,8 +219,7 @@ def sample_math_batch(model, tokenizer, batch_size: int = 4, max_new_tokens: int
         # Pad full sequences (for input_ids)
         full_seq_len = full_sequences[i].shape[0]
         if full_seq_len < max_full_len:
-            pad_token = tokenizer.pad_token_id or tokenizer.eos_token_id
-            padding = torch.full((max_full_len - full_seq_len,), pad_token, dtype=torch.long)
+            padding = torch.full((max_full_len - full_seq_len,), pad_token_id, dtype=torch.long)
             padded_full_seq = torch.cat([full_sequences[i], padding])
         else:
             padded_full_seq = full_sequences[i][:max_full_len]
@@ -223,8 +227,7 @@ def sample_math_batch(model, tokenizer, batch_size: int = 4, max_new_tokens: int
         # Pad generated tokens (for actions)
         action_seq_len = generated_tokens[i].shape[0]
         if action_seq_len < max_action_len:
-            pad_token = tokenizer.pad_token_id or tokenizer.eos_token_id
-            padding = torch.full((max_action_len - action_seq_len,), pad_token, dtype=torch.long)
+            padding = torch.full((max_action_len - action_seq_len,), pad_token_id, dtype=torch.long)
             padded_action_seq = torch.cat([generated_tokens[i], padding])
         else:
             padded_action_seq = generated_tokens[i][:max_action_len]
@@ -235,7 +238,7 @@ def sample_math_batch(model, tokenizer, batch_size: int = 4, max_new_tokens: int
     input_ids = torch.stack(padded_input_ids)
     actions = torch.stack(padded_actions)
     
-    return input_ids, actions, rewards, prompt_length
+    return input_ids, actions, rewards, prompt_length, pad_token_id
 
 
 def evaluate_model(model, tokenizer, eval_dataset, max_new_tokens=512):
@@ -431,7 +434,7 @@ def main():
     for episode in range(1, args.steps // args.epochs_per_batch + 1):
         # Sample once (expensive)
         batch = sample_math_batch(model, tokenizer, batch_size=args.batch_size, max_new_tokens=args.max_new_tokens)
-        input_ids, actions, rewards, prompt_length = batch
+        input_ids, actions, rewards, prompt_length, pad_token_id = batch
         
         # Set the model back to train mode before computing old_logp
         model.train()
@@ -457,7 +460,7 @@ def main():
         
         for epoch in range(args.epochs_per_batch):
             total_steps += 1
-            metrics = trainer.step(input_ids, actions, rewards, prompt_length, old_logp)
+            metrics = trainer.step(input_ids, actions, rewards, prompt_length, pad_token_id, old_logp)
             episode_losses.append(metrics['loss'])
             episode_kls.append(metrics['kl_loss'])
             
