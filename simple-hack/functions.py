@@ -37,7 +37,7 @@ def parse_completion(completion: str) -> tuple[str, str]:
         return thinking_content, content
     
     # No </think> tag found
-    return "", completion.strip()
+    return "", ""
 
 def is_correct(content, target):
     """

@@ -94,7 +94,6 @@ class GRPOTrainer:
         pad_token_id : int, token ID used for padding
         old_logp   : (B, G) old log probabilities for generated tokens only
         """
-        self.model.train()
         input_ids = input_ids.to(self.device)
         actions = actions.to(self.device)
         rewards = rewards.to(self.device)
@@ -124,7 +123,7 @@ class GRPOTrainer:
             # Skip length normalization and std normalization when dr=True
             advantages = rewards.unsqueeze(-1).expand_as(old_logp)
             advantages = advantages - advantages.mean()  # Only center, don't normalize std
-            advantages = advantages / 1000 # scale down advantages according to sequence length
+            advantages = advantages / 1000 # scale down advantages according to approximate sequence length
         else:
             # Apply full normalization (length + std) when dr=False
             seq_lengths = (target_actions != pad_token_id).sum(dim=1).float().clamp(min=1.0)  # Use actual pad token
@@ -152,6 +151,160 @@ class GRPOTrainer:
             "kl_loss": kl_loss.item(),
         }
 
+    def _run_evaluation(
+        self,
+        eval_dataset: Any,
+        tokenizer: Any,
+        max_new_tokens: int,
+        eval_type: str,
+        episode: int,
+        use_wandb: bool = False,
+    ) -> Dict[str, Any]:
+        """Run evaluation and log results.
+        
+        Parameters
+        ----------
+        eval_dataset : evaluation dataset
+        tokenizer : tokenizer for the model
+        max_new_tokens : maximum new tokens to generate
+        eval_type : "initial" or "final" for logging purposes
+        episode : current episode number for wandb logging
+        use_wandb : whether to log to wandb
+        
+        Returns
+        -------
+        Dict with evaluation metrics
+        """
+        self.model.eval()
+
+        print(f"\nRunning {eval_type} evaluation...")
+        metrics = evaluate_model(self.model, tokenizer, eval_dataset, max_new_tokens)
+        print(f"{eval_type.capitalize()} metrics: {metrics}")
+
+        if use_wandb:
+            wandb.log({
+                f"{eval_type}_eval/success_rate": metrics.get("eval_success_rate", 0),
+                f"{eval_type}_eval/reward_mean": metrics.get("eval_reward_mean", 0),
+                "episode": episode
+            })
+        
+        return metrics
+
+    def train(
+        self,
+        tokenizer: Any,
+        steps: int,
+        epochs_per_batch: int,
+        batch_size: int,
+        max_new_tokens: int,
+        eval_dataset: Optional[Any] = None,
+        use_wandb: bool = False,
+        kl_threshold: float = 0.02,
+    ) -> Dict[str, Any]:
+        """Train the model using GRPO.
+        
+        Parameters
+        ----------
+        tokenizer : tokenizer for the model
+        steps : total number of optimization steps
+        epochs_per_batch : number of optimization steps per batch
+        batch_size : batch size for training
+        max_new_tokens : maximum new tokens to generate
+        eval_dataset : optional dataset for evaluation
+        use_wandb : whether to log to wandb
+        kl_threshold : KL divergence threshold for early stopping
+        
+        Returns
+        -------
+        Dict with training statistics
+        """
+        print("Starting GRPO training...")
+        
+        total_steps = 0
+        training_rewards = []
+        
+        # Initial evaluation if eval dataset provided
+        if eval_dataset is not None:
+            initial_metrics = self._run_evaluation(eval_dataset, tokenizer, max_new_tokens, "initial", 0, use_wandb)
+
+        # Set the model back to train mode for training
+        self.model.train()
+        
+        # Main training loop
+        for episode in range(1, steps // epochs_per_batch + 1):
+            # Sample once (expensive)
+            batch = sample_math_batch(self.model, tokenizer, batch_size=batch_size, max_new_tokens=max_new_tokens)
+            input_ids, actions, rewards, prompt_length, pad_token_id = batch
+            
+            # Track batch rewards
+            batch_reward_mean = rewards.mean().item()
+            batch_reward_max = rewards.max().item()
+            batch_success_rate = (rewards > 0).float().mean().item()
+            training_rewards.extend(rewards.tolist())
+            
+            # Compute old_logp ONCE from current policy
+            with torch.no_grad():
+                outputs = self.model(input_ids.to(self.device))
+                # Extract logits only for positions predicting generated tokens
+                logits = outputs.logits[:, prompt_length-1:-1, :]
+                target_actions = actions.to(self.device)  # actions are already just generated tokens
+                old_logp = self._old_log_probs(logits, target_actions)
+            
+            # Take multiple optimization steps using same old_logp
+            episode_losses = []
+            episode_kls = []
+            
+            for epoch in range(epochs_per_batch):
+                total_steps += 1
+                metrics = self.step(input_ids, actions, rewards, prompt_length, pad_token_id, old_logp)
+                episode_losses.append(metrics['loss'])
+                episode_kls.append(metrics['kl_loss'])
+                
+                # Log training metrics
+                if use_wandb:
+                    wandb.log({
+                        "train/loss": metrics['loss'],
+                        "train/pg_loss": metrics['pg_loss'],
+                        "train/kl_divergence": metrics['kl_loss'],
+                        "train/batch_reward_mean": batch_reward_mean,
+                        "train/batch_reward_max": batch_reward_max,
+                        "train/batch_success_rate": batch_success_rate,
+                        "episode": episode,
+                        "step": total_steps
+                    })
+                
+                print(
+                    f"Episode {episode:04d}, Epoch {epoch+1:02d}/{epochs_per_batch} | "
+                    f"loss: {metrics['loss']:.4f} | "
+                    f"kl: {metrics['kl_loss']:.4f} | "
+                    f"reward: {batch_reward_mean:.3f} | "
+                    f"success: {batch_success_rate:.1%}"
+                )
+                
+                # Early stopping if KL divergence gets too high
+                if metrics['kl_loss'] > kl_threshold:
+                    print(f"  Early stopping due to high KL divergence: {metrics['kl_loss']:.4f}")
+                    break
+
+        # Final evaluation if eval dataset provided
+        if eval_dataset is not None:
+            final_metrics = self._run_evaluation(eval_dataset, tokenizer, max_new_tokens, "final", episode, use_wandb)
+                
+            # Log training summary
+            if use_wandb and wandb.run is not None:
+                wandb.run.summary["total_steps"] = total_steps
+                wandb.run.summary["final_success_rate"] = final_metrics.get("eval_success_rate", 0)
+                wandb.run.summary["improvement"] = final_metrics.get("eval_success_rate", 0) - initial_metrics.get("eval_success_rate", 0)
+
+        print("Training complete!")
+        
+        return {
+            "total_steps": total_steps,
+            "training_rewards": training_rewards,
+            "final_metrics": final_metrics if eval_dataset is not None else None,
+            "initial_metrics": initial_metrics if eval_dataset is not None else None,
+        }
+
 
 # ---------------------------------------------------------------------------
 # Math environment using 24-game problems
@@ -174,7 +327,6 @@ def sample_math_batch(model, tokenizer, batch_size: int = 4, max_new_tokens: int
     attention_mask = tokenized["attention_mask"]
     
     # Generate completions using the model
-    model.eval()
     with torch.no_grad():
         generated = model.generate(
             input_ids=input_ids.to(model.device),
@@ -198,7 +350,7 @@ def sample_math_batch(model, tokenizer, batch_size: int = 4, max_new_tokens: int
     # Concatenate input_ids and generated_tokens for full sequences
     # Move input_ids to the same device as generated_tokens
     input_ids = input_ids.to(generated.device)
-    full_sequences = torch.cat([input_ids, generated_tokens], dim=1)
+    full_sequences = generated
     
     # For GRPO, actions should only be the generated tokens (not prompt + completion)
     actions = generated_tokens.clone()
@@ -416,97 +568,17 @@ def main():
     
     eval_dataset = Dataset.from_list(eval_data)
     
-    # Initial evaluation
-    print("Running initial evaluation...")
-    initial_metrics = evaluate_model(model, tokenizer, eval_dataset, args.max_new_tokens)
-    print(f"Initial metrics: {initial_metrics}")
-
-    if args.use_wandb:
-        wandb.log({
-            "initial_eval/success_rate": initial_metrics.get("eval_success_rate", 0),
-            "initial_eval/reward_mean": initial_metrics.get("eval_reward_mean", 0),
-            "episode": 0
-        })
-
-    total_steps = 0
-    training_rewards = []
-    
-    for episode in range(1, args.steps // args.epochs_per_batch + 1):
-        # Sample once (expensive)
-        batch = sample_math_batch(model, tokenizer, batch_size=args.batch_size, max_new_tokens=args.max_new_tokens)
-        input_ids, actions, rewards, prompt_length, pad_token_id = batch
-        
-        # Set the model back to train mode before computing old_logp
-        model.train()
-        
-        # Track batch rewards
-        batch_reward_mean = rewards.mean().item()
-        batch_reward_max = rewards.max().item()
-        batch_success_rate = (rewards > 0).float().mean().item()
-        training_rewards.extend(rewards.tolist())
-        
-        # Compute old_logp ONCE from current policy
-        with torch.no_grad():
-            # Keep model in train mode to match new_logp computation
-            outputs = model(input_ids.to(trainer.device))
-            # Extract logits only for positions predicting generated tokens
-            logits = outputs.logits[:, prompt_length-1:-1, :]
-            target_actions = actions.to(trainer.device)  # actions are already just generated tokens
-            old_logp = trainer._old_log_probs(logits, target_actions)
-        
-        # Take multiple optimization steps using same old_logp
-        episode_losses = []
-        episode_kls = []
-        
-        for epoch in range(args.epochs_per_batch):
-            total_steps += 1
-            metrics = trainer.step(input_ids, actions, rewards, prompt_length, pad_token_id, old_logp)
-            episode_losses.append(metrics['loss'])
-            episode_kls.append(metrics['kl_loss'])
-            
-            # Log training metrics
-            if args.use_wandb:
-                wandb.log({
-                    "train/loss": metrics['loss'],
-                    "train/pg_loss": metrics['pg_loss'],
-                    "train/kl_divergence": metrics['kl_loss'],
-                    "train/batch_reward_mean": batch_reward_mean,
-                    "train/batch_reward_max": batch_reward_max,
-                    "train/batch_success_rate": batch_success_rate,
-                    "episode": episode,
-                    "step": total_steps
-                })
-            
-            print(
-                f"Episode {episode:04d}, Epoch {epoch+1:02d}/{args.epochs_per_batch} | "
-                f"loss: {metrics['loss']:.4f} | "
-                f"kl: {metrics['kl_loss']:.4f} | "
-                f"reward: {batch_reward_mean:.3f} | "
-                f"success: {batch_success_rate:.1%}"
-            )
-            
-            # Early stopping if KL divergence gets too high
-            if metrics['kl_loss'] > 0.02:
-                print(f"  Early stopping due to high KL divergence: {metrics['kl_loss']:.4f}")
-                break
-
-    # Final evaluation
-    print("\nRunning final evaluation...")
-    final_metrics = evaluate_model(model, tokenizer, eval_dataset, args.max_new_tokens)
-    print(f"Final metrics: {final_metrics}")
-
-    if args.use_wandb:
-        wandb.log({
-            "final_eval/success_rate": final_metrics.get("eval_success_rate", 0),
-            "final_eval/reward_mean": final_metrics.get("eval_reward_mean", 0),
-            "episode": episode
-        })
-        
-        # Log training summary
-        if wandb.run is not None:
-            wandb.run.summary["total_steps"] = total_steps
-            wandb.run.summary["final_success_rate"] = final_metrics.get("eval_success_rate", 0)
-            wandb.run.summary["improvement"] = final_metrics.get("eval_success_rate", 0) - initial_metrics.get("eval_success_rate", 0)
+    # Run training using the new train method
+    training_results = trainer.train(
+        tokenizer=tokenizer,
+        steps=args.steps,
+        epochs_per_batch=args.epochs_per_batch,
+        batch_size=args.batch_size,
+        max_new_tokens=args.max_new_tokens,
+        eval_dataset=eval_dataset,
+        use_wandb=args.use_wandb,
+        kl_threshold=0.02,
+    )
 
     print("Training complete!")
     
