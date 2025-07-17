@@ -79,16 +79,18 @@ class GRPOTrainer:
         input_ids: torch.Tensor,
         actions: torch.Tensor,
         rewards: torch.Tensor,
-        old_logp: Optional[torch.Tensor] = None,  # Add this parameter
+        prompt_length: int,
+        old_logp: Optional[torch.Tensor] = None,
     ) -> Dict[str, Any]:
         """Run a single optimisation step on a batch.
 
         Parameters
         ----------
-        input_ids : (B, T) token ids fed into the model
-        actions    : (B, T) actions sampled from the policy (identical to next tokens)
-        rewards    : (B,) scalar reward for each sequence (broadcasted later)
-        old_logp   : (B, T-1) old log probabilities from original policy (optional)
+        input_ids : (B, T) full sequence tokens (prompt + generated)
+        actions    : (B, G) generated tokens only
+        rewards    : (B,) scalar reward for each sequence
+        prompt_length : int, length of the prompt (same for all in batch)
+        old_logp   : (B, G) old log probabilities for generated tokens only
         """
         self.model.train()
         input_ids = input_ids.to(self.device)
@@ -97,21 +99,22 @@ class GRPOTrainer:
 
         # Forward pass
         outputs = self.model(input_ids)
-        logits = outputs.logits[:, :-1, :]  # exclude final position (no next-token)
-        target_actions = actions[:, 1:]      # actions correspond to next-tokens
+        
+        # Extract logits only for positions predicting generated tokens
+        # We want logits[prompt_length-1:] to predict actions (generated tokens)
+        logits = outputs.logits[:, prompt_length-1:-1, :]  # positions predicting generated tokens
+        target_actions = actions  # actions are already just the generated tokens
 
-        # Get log-probs from the reference model
+        # Get log-probs from the reference model  
         with torch.no_grad():
             ref_outputs = self.ref_model(input_ids)
-            ref_logits = ref_outputs.logits[:, :-1, :]
+            ref_logits = ref_outputs.logits[:, prompt_length-1:-1, :]
             ref_logp = self._old_log_probs(ref_logits, target_actions)
 
         # Compute old log-probabilities (detach from graph)
         if old_logp is None:
-            # First time - compute from current policy
             old_logp = self._old_log_probs(logits.detach(), target_actions)
         else:
-            # Use provided old_logp from original policy
             old_logp = old_logp.to(self.device)
 
         # Compute advantages with optional sequence length normalization and standardization
@@ -182,8 +185,7 @@ def sample_math_batch(model, tokenizer, batch_size: int = 4, max_new_tokens: int
         )
     
     # Extract only the generated parts (remove prompt)
-    prompt_lengths = input_ids.shape[1]
-    generated_tokens = generated[:, prompt_lengths:]
+    generated_tokens = generated[:, input_ids.shape[1]:]
     
     # Decode completions
     completions = [tokenizer.decode(gen, skip_special_tokens=True) for gen in generated_tokens]
@@ -196,31 +198,44 @@ def sample_math_batch(model, tokenizer, batch_size: int = 4, max_new_tokens: int
     input_ids = input_ids.to(generated.device)
     full_sequences = torch.cat([input_ids, generated_tokens], dim=1)
     
-    # For GRPO, actions are the full sequences (including prompt + completion)
-    actions = full_sequences.clone()
+    # For GRPO, actions should only be the generated tokens (not prompt + completion)
+    actions = generated_tokens.clone()
+    
+    # Store the prompt length (same for all items in batch since we use same problem)
+    prompt_length = input_ids.shape[1]
     
     # Pad sequences to same length for batch processing
-    max_len = max(seq.shape[0] for seq in full_sequences)
+    max_full_len = max(seq.shape[0] for seq in full_sequences)
+    max_action_len = max(seq.shape[0] for seq in generated_tokens)
     padded_input_ids = []
     padded_actions = []
     
     for i in range(batch_size):
-        seq_len = full_sequences[i].shape[0]
-        if seq_len < max_len:
-            # Pad with pad_token_id or eos_token_id
+        # Pad full sequences (for input_ids)
+        full_seq_len = full_sequences[i].shape[0]
+        if full_seq_len < max_full_len:
             pad_token = tokenizer.pad_token_id or tokenizer.eos_token_id
-            padding = torch.full((max_len - seq_len,), pad_token, dtype=torch.long)
-            padded_seq = torch.cat([full_sequences[i], padding])
+            padding = torch.full((max_full_len - full_seq_len,), pad_token, dtype=torch.long)
+            padded_full_seq = torch.cat([full_sequences[i], padding])
         else:
-            padded_seq = full_sequences[i][:max_len]
+            padded_full_seq = full_sequences[i][:max_full_len]
         
-        padded_input_ids.append(padded_seq)
-        padded_actions.append(padded_seq)
+        # Pad generated tokens (for actions)
+        action_seq_len = generated_tokens[i].shape[0]
+        if action_seq_len < max_action_len:
+            pad_token = tokenizer.pad_token_id or tokenizer.eos_token_id
+            padding = torch.full((max_action_len - action_seq_len,), pad_token, dtype=torch.long)
+            padded_action_seq = torch.cat([generated_tokens[i], padding])
+        else:
+            padded_action_seq = generated_tokens[i][:max_action_len]
+        
+        padded_input_ids.append(padded_full_seq)
+        padded_actions.append(padded_action_seq)
     
     input_ids = torch.stack(padded_input_ids)
     actions = torch.stack(padded_actions)
     
-    return input_ids, actions, rewards
+    return input_ids, actions, rewards, prompt_length
 
 
 def evaluate_model(model, tokenizer, eval_dataset, max_new_tokens=512):
@@ -416,7 +431,7 @@ def main():
     for episode in range(1, args.steps // args.epochs_per_batch + 1):
         # Sample once (expensive)
         batch = sample_math_batch(model, tokenizer, batch_size=args.batch_size, max_new_tokens=args.max_new_tokens)
-        input_ids, actions, rewards = batch
+        input_ids, actions, rewards, prompt_length = batch
         
         # Set the model back to train mode before computing old_logp
         model.train()
@@ -431,8 +446,9 @@ def main():
         with torch.no_grad():
             # Keep model in train mode to match new_logp computation
             outputs = model(input_ids.to(trainer.device))
-            logits = outputs.logits[:, :-1, :]  # exclude final position
-            target_actions = actions[:, 1:].to(trainer.device)  # actions correspond to next-tokens
+            # Extract logits only for positions predicting generated tokens
+            logits = outputs.logits[:, prompt_length-1:-1, :]
+            target_actions = actions.to(trainer.device)  # actions are already just generated tokens
             old_logp = trainer._old_log_probs(logits, target_actions)
         
         # Take multiple optimization steps using same old_logp
@@ -441,7 +457,7 @@ def main():
         
         for epoch in range(args.epochs_per_batch):
             total_steps += 1
-            metrics = trainer.step(input_ids, actions, rewards, old_logp)
+            metrics = trainer.step(input_ids, actions, rewards, prompt_length, old_logp)
             episode_losses.append(metrics['loss'])
             episode_kls.append(metrics['kl_loss'])
             
