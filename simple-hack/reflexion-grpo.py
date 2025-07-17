@@ -106,9 +106,18 @@ class GRPOTrainer:
         logits = outputs.logits[:, prompt_length-1:-1, :]  # positions predicting generated tokens
         target_actions = actions  # actions are already just the generated tokens
 
-        # Get log-probs from the reference model  
+        # Compute reference log-probs with LoRA adapters disabled to avoid parameter drift
+        # If the model is a PEFT/LoRA model, temporarily turn off the adapters; otherwise
+        # fall back to the separate frozen reference model.
         with torch.no_grad():
-            ref_outputs = self.ref_model(input_ids)
+            if hasattr(self.model, "disable_adapter"):
+                # LoRA or other PEFT model – disable adapters for a clean reference policy
+                with self.model.disable_adapter():  # type: ignore[attr-defined]
+                    ref_outputs = self.model(input_ids)
+            else:
+                # Full-fine-tune setting – use the dedicated frozen reference model
+                ref_outputs = self.ref_model(input_ids)
+
             ref_logits = ref_outputs.logits[:, prompt_length-1:-1, :]
             ref_logp = self._old_log_probs(ref_logits, target_actions)
 
@@ -133,6 +142,14 @@ class GRPOTrainer:
 
         # New log-probabilities for gradient flow
         new_logp = self._old_log_probs(logits, target_actions)
+
+        # Debug logging for log-probs
+        print("[DEBUG] old_logp: mean={:.4f}, std={:.4f}, min={:.4f}, max={:.4f}".format(
+            old_logp.mean().item(), old_logp.std().item(), old_logp.min().item(), old_logp.max().item()))
+        print("[DEBUG] new_logp: mean={:.4f}, std={:.4f}, min={:.4f}, max={:.4f}".format(
+            new_logp.mean().item(), new_logp.std().item(), new_logp.min().item(), new_logp.max().item()))
+        print("[DEBUG] ref_logp: mean={:.4f}, std={:.4f}, min={:.4f}, max={:.4f}".format(
+            ref_logp.mean().item(), ref_logp.std().item(), ref_logp.min().item(), ref_logp.max().item()))
 
         # Compute loss components
         pg_loss = self._pg_loss(new_logp, old_logp, advantages)
@@ -274,6 +291,7 @@ class GRPOTrainer:
                 
                 print(
                     f"Episode {episode:04d}, Epoch {epoch+1:02d}/{epochs_per_batch} | "
+                    f"Step: {total_steps:05d} | "
                     f"loss: {metrics['loss']:.4f} | "
                     f"kl: {metrics['kl_loss']:.4f} | "
                     f"reward: {batch_reward_mean:.3f} | "
@@ -509,6 +527,9 @@ def main():
     # Reward normalization configuration
     parser.add_argument("--dr", action="store_true", default=True, help="Disable reward normalization (skip length normalization and std division)")
     
+    # KL threshold configuration
+    parser.add_argument("--kl_threshold", type=float, default=0.02, help="KL divergence threshold for early stopping")
+
     args = parser.parse_args()
 
     # Initialize wandb if requested
@@ -602,7 +623,7 @@ def main():
         max_new_tokens=args.max_new_tokens,
         eval_dataset=eval_dataset,
         use_wandb=args.use_wandb,
-        kl_threshold=0.02,
+        kl_threshold=args.kl_threshold,
     )
 
     print("Training complete!")
