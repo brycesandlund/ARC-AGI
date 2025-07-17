@@ -218,8 +218,6 @@ class GRPOTrainer:
         -------
         Dict with training statistics
         """
-        print("Starting GRPO training...")
-        
         total_steps = 0
         training_rewards = []
         
@@ -227,6 +225,7 @@ class GRPOTrainer:
         if eval_dataset is not None:
             initial_metrics = self._run_evaluation(eval_dataset, tokenizer, max_new_tokens, "initial", 0, use_wandb)
 
+        print("Starting GRPO training...")
         # Set the model back to train mode for training
         self.model.train()
         
@@ -306,6 +305,31 @@ class GRPOTrainer:
         }
 
 
+def generate_with_cache(model, **kwargs):
+    """
+    Temporarily disables gradient checkpointing and enables caching for faster generation.
+    """
+    # Store original states
+    was_gradient_checkpointing = model.is_gradient_checkpointing
+    original_use_cache = model.config.use_cache
+
+    # Disable gradient checkpointing and enable cache for generation
+    if was_gradient_checkpointing:
+        model.gradient_checkpointing_disable()
+    model.config.use_cache = True
+
+    # Generate
+    with torch.no_grad():
+        generated_ids = model.generate(**kwargs)
+
+    # Restore original states
+    model.config.use_cache = original_use_cache
+    if was_gradient_checkpointing:
+        model.gradient_checkpointing_enable()
+
+    return generated_ids
+
+
 # ---------------------------------------------------------------------------
 # Math environment using 24-game problems
 # ---------------------------------------------------------------------------
@@ -327,16 +351,16 @@ def sample_math_batch(model, tokenizer, batch_size: int = 4, max_new_tokens: int
     attention_mask = tokenized["attention_mask"]
     
     # Generate completions using the model
-    with torch.no_grad():
-        generated = model.generate(
-            input_ids=input_ids.to(model.device),
-            attention_mask=attention_mask.to(model.device),
-            max_new_tokens=max_new_tokens,
-            temperature=0.7,
-            do_sample=True,
-            pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id,
-            repetition_penalty=1.1
-        )
+    generated = generate_with_cache(
+        model,
+        input_ids=input_ids.to(model.device),
+        attention_mask=attention_mask.to(model.device),
+        max_new_tokens=max_new_tokens,
+        temperature=0.7,
+        do_sample=True,
+        pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id,
+        repetition_penalty=1.1
+    )
     
     # Extract only the generated parts (remove prompt)
     generated_tokens = generated[:, input_ids.shape[1]:]
@@ -410,16 +434,16 @@ def evaluate_model(model, tokenizer, eval_dataset, max_new_tokens=512):
         inputs = tokenizer(prompt, return_tensors="pt", padding=True, truncation=True)
         
         # Generate completion
-        with torch.no_grad():
-            generated = model.generate(
-                input_ids=inputs["input_ids"].to(model.device),
-                attention_mask=inputs["attention_mask"].to(model.device),
-                max_new_tokens=max_new_tokens,
-                temperature=0.7,
-                do_sample=True,
-                pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id,
-                repetition_penalty=1.1
-            )
+        generated = generate_with_cache(
+            model,
+            input_ids=inputs["input_ids"].to(model.device),
+            attention_mask=inputs["attention_mask"].to(model.device),
+            max_new_tokens=max_new_tokens,
+            temperature=0.7,
+            do_sample=True,
+            pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id,
+            repetition_penalty=1.1
+        )
         
         # Extract only the generated part
         prompt_length = inputs["input_ids"].shape[1]
@@ -515,6 +539,7 @@ def main():
     # Enable gradient checkpointing for memory efficiency
     if args.gradient_checkpointing:
         print("Enabling gradient checkpointing for memory optimization...")
+        base_model.config.use_cache = False
         base_model.gradient_checkpointing_enable()
 
     # Apply LoRA by default (unless disabled)
