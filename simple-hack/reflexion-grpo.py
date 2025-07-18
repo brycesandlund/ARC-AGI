@@ -5,6 +5,7 @@ import copy
 
 import torch
 from torch.nn import functional as F
+from torch.optim.lr_scheduler import LinearLR
 from transformers import AutoTokenizer, AutoModelForCausalLM, AutoConfig
 from peft import LoraConfig, get_peft_model
 import wandb
@@ -33,6 +34,9 @@ class GRPOTrainer:
         kl_coef: float = 0.01,
         device: str = "cuda" if torch.cuda.is_available() else "cpu",
         dr: bool = True,
+        total_steps: Optional[int] = None,
+        lr_schedule: bool = True,
+        min_lr_ratio: float = 0.1,
     ) -> None:
         self.model = model.to(device)
         self.ref_model = ref_model.to(device)
@@ -42,6 +46,22 @@ class GRPOTrainer:
         self.kl_coef = kl_coef
         self.device = device
         self.dr = dr
+        
+        # Learning rate scheduler setup
+        self.lr_schedule = lr_schedule
+        self.scheduler = None
+        if lr_schedule and total_steps is not None:
+            # LinearLR: linearly decay from 1.0 to min_lr_ratio over total_steps
+            self.scheduler = LinearLR(
+                self.optimizer, 
+                start_factor=1.0, 
+                end_factor=min_lr_ratio, 
+                total_iters=total_steps
+            )
+            print(f"Initialized linear LR scheduler: {lr:.2e} -> {lr * min_lr_ratio:.2e} over {total_steps} steps")
+            print(f"Initial optimizer LR: {self.optimizer.param_groups[0]['lr']:.2e}")
+        else:
+            print(f"No LR scheduling - static LR: {self.optimizer.param_groups[0]['lr']:.2e}")
 
     def _old_log_probs(self, logits: torch.Tensor, actions: torch.Tensor) -> torch.Tensor:
         """Return log-probabilities of `actions` under the policy that produced `logits`."""
@@ -166,6 +186,7 @@ class GRPOTrainer:
             "loss": loss.item(),
             "pg_loss": pg_loss.item(),
             "kl_loss": kl_loss.item(),
+            "lr": self.optimizer.param_groups[0]['lr'],
         }
 
     def _run_evaluation(
@@ -276,12 +297,17 @@ class GRPOTrainer:
                 episode_losses.append(metrics['loss'])
                 episode_kls.append(metrics['kl_loss'])
                 
+                # Step the learning rate scheduler
+                if self.scheduler is not None:
+                    self.scheduler.step()
+                
                 # Log training metrics
                 if use_wandb:
                     wandb.log({
                         "train/loss": metrics['loss'],
                         "train/pg_loss": metrics['pg_loss'],
                         "train/kl_divergence": metrics['kl_loss'],
+                        "train/learning_rate": metrics['lr'],
                         "train/batch_reward_mean": batch_reward_mean,
                         "train/batch_reward_max": batch_reward_max,
                         "train/batch_success_rate": batch_success_rate,
@@ -294,6 +320,7 @@ class GRPOTrainer:
                     f"Step: {total_steps:05d} | "
                     f"loss: {metrics['loss']:.4f} | "
                     f"kl: {metrics['kl_loss']:.4f} | "
+                    f"lr: {metrics['lr']:.2e} | "
                     f"reward: {batch_reward_mean:.3f} | "
                     f"success: {batch_success_rate:.1%}"
                 )
@@ -529,6 +556,10 @@ def main():
     
     # KL threshold configuration
     parser.add_argument("--kl_threshold", type=float, default=0.02, help="KL divergence threshold for early stopping")
+    
+    # Learning rate scheduler configuration
+    parser.add_argument("--lr_schedule", action="store_true", default=True, help="Use linear learning rate decay")
+    parser.add_argument("--min_lr_ratio", type=float, default=0.1, help="Minimum learning rate as ratio of initial LR (default: 0.1 = 10% of initial LR)")
 
     args = parser.parse_args()
 
@@ -591,6 +622,9 @@ def main():
         clip_ratio=args.clip_ratio,
         kl_coef=args.kl_coef,
         dr=args.dr,
+        total_steps=args.steps,
+        lr_schedule=args.lr_schedule,
+        min_lr_ratio=args.min_lr_ratio,
     )
 
     print("Starting GRPO fine-tuning with math problems …")
