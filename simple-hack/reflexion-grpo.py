@@ -80,7 +80,19 @@ class GRPOTrainer:
             clipped_ratio = torch.clamp(ratio, 1.0 - self.clip_ratio, 1.0 + self.clip_ratio)
             pg_loss1 = -(ratio * advantages)
             pg_loss2 = -(clipped_ratio * advantages)
-            return torch.max(pg_loss1, pg_loss2).mean()
+            pg_losses = torch.max(pg_loss1, pg_loss2)
+            
+            # Debug: policy gradient loss statistics before mean
+            print(f"[DEBUG PG] pg_loss1: mean={pg_loss1.mean().item():.4f}, std={pg_loss1.std().item():.4f}, min={pg_loss1.min().item():.4f}, max={pg_loss1.max().item():.4f}")
+            print(f"[DEBUG PG] pg_loss2: mean={pg_loss2.mean().item():.4f}, std={pg_loss2.std().item():.4f}, min={pg_loss2.min().item():.4f}, max={pg_loss2.max().item():.4f}")
+            print(f"[DEBUG PG] final_pg_losses: mean={pg_losses.mean().item():.4f}, std={pg_losses.std().item():.4f}, min={pg_losses.min().item():.4f}, max={pg_losses.max().item():.4f}")
+            
+            # Count clipping statistics
+            clipped_mask = (ratio < 1.0 - self.clip_ratio) | (ratio > 1.0 + self.clip_ratio)
+            clipped_fraction = clipped_mask.float().mean().item()
+            print(f"[DEBUG PG] clipped_fraction: {clipped_fraction:.3f}")
+            
+            return pg_losses.mean()
         else:
             return -(ratio * advantages).mean()
 
@@ -92,7 +104,13 @@ class GRPOTrainer:
         """Computes the KL divergence loss against the reference model."""
         log_ratio_ref = ref_logp - new_logp
         ratio_ref = torch.exp(log_ratio_ref)
-        return (ratio_ref - log_ratio_ref - 1).mean()
+        kl_losses = ratio_ref - log_ratio_ref - 1
+        
+        # Debug: KL loss statistics
+        print(f"[DEBUG KL] log_ratio_ref: mean={log_ratio_ref.mean().item():.4f}, std={log_ratio_ref.std().item():.4f}, min={log_ratio_ref.min().item():.4f}, max={log_ratio_ref.max().item():.4f}")
+        print(f"[DEBUG KL] kl_losses: mean={kl_losses.mean().item():.4f}, std={kl_losses.std().item():.4f}, min={kl_losses.min().item():.4f}, max={kl_losses.max().item():.4f}")
+        
+        return kl_losses.mean()
 
     def step(
         self,
@@ -163,13 +181,13 @@ class GRPOTrainer:
         # New log-probabilities for gradient flow
         new_logp = self._old_log_probs(logits, target_actions)
 
-        # Debug logging for log-probs
-        print("[DEBUG] old_logp: mean={:.4f}, std={:.4f}, min={:.4f}, max={:.4f}".format(
-            old_logp.mean().item(), old_logp.std().item(), old_logp.min().item(), old_logp.max().item()))
-        print("[DEBUG] new_logp: mean={:.4f}, std={:.4f}, min={:.4f}, max={:.4f}".format(
-            new_logp.mean().item(), new_logp.std().item(), new_logp.min().item(), new_logp.max().item()))
-        print("[DEBUG] ref_logp: mean={:.4f}, std={:.4f}, min={:.4f}, max={:.4f}".format(
-            ref_logp.mean().item(), ref_logp.std().item(), ref_logp.min().item(), ref_logp.max().item()))
+        # # Debug logging for log-probs
+        # print("[DEBUG] old_logp: mean={:.4f}, std={:.4f}, min={:.4f}, max={:.4f}".format(
+        #     old_logp.mean().item(), old_logp.std().item(), old_logp.min().item(), old_logp.max().item()))
+        # print("[DEBUG] new_logp: mean={:.4f}, std={:.4f}, min={:.4f}, max={:.4f}".format(
+        #     new_logp.mean().item(), new_logp.std().item(), new_logp.min().item(), new_logp.max().item()))
+        # print("[DEBUG] ref_logp: mean={:.4f}, std={:.4f}, min={:.4f}, max={:.4f}".format(
+        #     ref_logp.mean().item(), ref_logp.std().item(), ref_logp.min().item(), ref_logp.max().item()))
 
         # Compute loss components
         pg_loss = self._pg_loss(new_logp, old_logp, advantages)
