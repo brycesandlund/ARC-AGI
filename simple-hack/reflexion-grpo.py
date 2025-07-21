@@ -397,6 +397,55 @@ def generate_with_cache(model, **kwargs):
 # Math environment using 24-game problems
 # ---------------------------------------------------------------------------
 
+def pad_sequences_for_batch(full_sequences, generated_tokens, batch_size, pad_token_id):
+    """Pad sequences to same length for batch processing.
+    
+    Parameters
+    ----------
+    full_sequences : list of torch.Tensor
+        Full sequences (prompt + generated tokens)
+    generated_tokens : list of torch.Tensor
+        Generated tokens only
+    batch_size : int
+        Size of the batch
+    pad_token_id : int
+        Token ID to use for padding
+        
+    Returns
+    -------
+    tuple[torch.Tensor, torch.Tensor]
+        Padded input_ids and actions tensors
+    """
+    max_full_len = max(seq.shape[0] for seq in full_sequences)
+    max_action_len = max(seq.shape[0] for seq in generated_tokens)
+    padded_input_ids = []
+    padded_actions = []
+    
+    for i in range(batch_size):
+        # Pad full sequences (for input_ids)
+        full_seq_len = full_sequences[i].shape[0]
+        if full_seq_len < max_full_len:
+            padding = torch.full((max_full_len - full_seq_len,), pad_token_id, dtype=torch.long)
+            padded_full_seq = torch.cat([full_sequences[i], padding])
+        else:
+            padded_full_seq = full_sequences[i][:max_full_len]
+        
+        # Pad generated tokens (for actions)
+        action_seq_len = generated_tokens[i].shape[0]
+        if action_seq_len < max_action_len:
+            padding = torch.full((max_action_len - action_seq_len,), pad_token_id, dtype=torch.long)
+            padded_action_seq = torch.cat([generated_tokens[i], padding])
+        else:
+            padded_action_seq = generated_tokens[i][:max_action_len]
+        
+        padded_input_ids.append(padded_full_seq)
+        padded_actions.append(padded_action_seq)
+    
+    input_ids = torch.stack(padded_input_ids)
+    actions = torch.stack(padded_actions)
+    
+    return input_ids, actions
+
 def sample_math_batch(model, tokenizer, batch_size: int = 4, max_new_tokens: int = 512):
     """Generate a batch of math problems and model completions for GRPO training."""
     
@@ -449,33 +498,7 @@ def sample_math_batch(model, tokenizer, batch_size: int = 4, max_new_tokens: int
     pad_token_id = tokenizer.pad_token_id or tokenizer.eos_token_id
     
     # Pad sequences to same length for batch processing
-    max_full_len = max(seq.shape[0] for seq in full_sequences)
-    max_action_len = max(seq.shape[0] for seq in generated_tokens)
-    padded_input_ids = []
-    padded_actions = []
-    
-    for i in range(batch_size):
-        # Pad full sequences (for input_ids)
-        full_seq_len = full_sequences[i].shape[0]
-        if full_seq_len < max_full_len:
-            padding = torch.full((max_full_len - full_seq_len,), pad_token_id, dtype=torch.long)
-            padded_full_seq = torch.cat([full_sequences[i], padding])
-        else:
-            padded_full_seq = full_sequences[i][:max_full_len]
-        
-        # Pad generated tokens (for actions)
-        action_seq_len = generated_tokens[i].shape[0]
-        if action_seq_len < max_action_len:
-            padding = torch.full((max_action_len - action_seq_len,), pad_token_id, dtype=torch.long)
-            padded_action_seq = torch.cat([generated_tokens[i], padding])
-        else:
-            padded_action_seq = generated_tokens[i][:max_action_len]
-        
-        padded_input_ids.append(padded_full_seq)
-        padded_actions.append(padded_action_seq)
-    
-    input_ids = torch.stack(padded_input_ids)
-    actions = torch.stack(padded_actions)
+    input_ids, actions = pad_sequences_for_batch(full_sequences, generated_tokens, batch_size, pad_token_id)
     
     return input_ids, actions, rewards, prompt_length, pad_token_id
 
