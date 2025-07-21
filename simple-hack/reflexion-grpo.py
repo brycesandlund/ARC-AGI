@@ -480,23 +480,26 @@ def sample_math_batch(model, tokenizer, batch_size: int = 4, max_new_tokens: int
     return input_ids, actions, rewards, prompt_length, pad_token_id
 
 
-def evaluate_model(model, tokenizer, eval_dataset, max_new_tokens=512):
-    """Simple evaluation function that generates completions and calculates rewards."""
+def evaluate_model(model, tokenizer, eval_dataset, max_new_tokens=512, batch_size=12):
+    """Batched evaluation function that generates completions and calculates rewards."""
     
     model.eval()
     total_reward = 0.0
     total_samples = 0
     success_count = 0
     
-    # Process evaluation dataset
-    for sample in eval_dataset:
-        prompt = sample["query"]
-        target = sample["target"]
+    # Convert dataset to list if it's not already
+    eval_samples = list(eval_dataset)
+    
+    # Process evaluation dataset in batches
+    for i in range(0, len(eval_samples), batch_size):
+        batch_samples = eval_samples[i:i+batch_size]
+        batch_prompts = [sample["query"] for sample in batch_samples]
         
-        # Tokenize the prompt
-        inputs = tokenizer(prompt, return_tensors="pt", padding=True, truncation=True)
+        # Tokenize the batch of prompts
+        inputs = tokenizer(batch_prompts, return_tensors="pt", padding=True, truncation=True)
         
-        # Generate completion
+        # Generate completions for the batch
         generated = generate_with_cache(
             model,
             input_ids=inputs["input_ids"].to(model.device),
@@ -508,19 +511,20 @@ def evaluate_model(model, tokenizer, eval_dataset, max_new_tokens=512):
             repetition_penalty=1.1
         )
         
-        # Extract only the generated part
+        # Extract only the generated parts and decode completions
         prompt_length = inputs["input_ids"].shape[1]
         generated_tokens = generated[:, prompt_length:]
-        completion = tokenizer.decode(generated_tokens[0], skip_special_tokens=True)
+        completions = [tokenizer.decode(gen, skip_special_tokens=True) for gen in generated_tokens]
         
-        # Calculate reward
-        rewards = math_reward_func([completion], [prompt])
-        reward = rewards[0]
+        # Calculate rewards for the batch
+        batch_rewards = math_reward_func(completions, batch_prompts)
         
-        total_reward += reward
-        total_samples += 1
-        if reward > 0:
-            success_count += 1
+        # Accumulate statistics
+        for reward in batch_rewards:
+            total_reward += reward
+            total_samples += 1
+            if reward > 0:
+                success_count += 1
     
     # Calculate metrics
     avg_reward = total_reward / total_samples if total_samples > 0 else 0.0
