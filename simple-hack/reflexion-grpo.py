@@ -446,17 +446,7 @@ def pad_sequences_for_batch(full_sequences, generated_tokens, batch_size, pad_to
     
     return input_ids, actions
 
-def sample_math_batch(model, tokenizer, batch_size: int = 4, max_new_tokens: int = 512):
-    """Generate a batch of math problems and model completions for GRPO training."""
-    
-    # Generate one math problem and use it for all batch elements
-    problem_generator = generate_math_problems(tokenizer, 1)
-    single_problem = next(problem_generator)
-    problems = [single_problem for _ in range(batch_size)]
-    
-    # Extract prompts (all the same now)
-    prompts = [problem["prompt"] for problem in problems]
-    
+def sample_and_reward(model, tokenizer, batch_size, prompts, max_new_tokens, pad):
     # Tokenize prompts
     tokenized = tokenizer(prompts, return_tensors="pt", padding=True, truncation=True)
     input_ids = tokenized["input_ids"]
@@ -498,9 +488,23 @@ def sample_math_batch(model, tokenizer, batch_size: int = 4, max_new_tokens: int
     pad_token_id = tokenizer.pad_token_id or tokenizer.eos_token_id
     
     # Pad sequences to same length for batch processing
-    input_ids, actions = pad_sequences_for_batch(full_sequences, generated_tokens, batch_size, pad_token_id)
+    if pad:
+        input_ids, actions = pad_sequences_for_batch(full_sequences, generated_tokens, batch_size, pad_token_id)
     
     return input_ids, actions, rewards, prompt_length, pad_token_id
+
+def sample_math_batch(model, tokenizer, batch_size: int = 4, max_new_tokens: int = 512, pad: bool = True):
+    """Generate a batch of math problems and model completions for GRPO training."""
+    
+    # Generate one math problem and use it for all batch elements
+    problem_generator = generate_math_problems(tokenizer, 1)
+    single_problem = next(problem_generator)
+    problems = [single_problem for _ in range(batch_size)]
+    
+    # Extract prompts (all the same now)
+    prompts = [problem["prompt"] for problem in problems]
+    
+    return sample_and_reward(model, tokenizer, batch_size, prompts, max_new_tokens, pad=pad)
 
 
 def evaluate_model(model, tokenizer, eval_dataset, max_new_tokens=512, batch_size=12):
