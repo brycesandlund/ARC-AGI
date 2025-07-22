@@ -399,9 +399,24 @@ def generate_with_cache(model, **kwargs):
     return generated_ids
 
 
-def generate_and_decode(model, tokenizer, prompts, max_new_tokens, disable_adapter=False, **gen_kwargs):
+def generate_and_decode(model, tokenizer, prompts, max_new_tokens, disable_adapter=False, enable_thinking: bool = True, **gen_kwargs):
     """Generates completions from a model and decodes them."""
-    tokenized = tokenizer(prompts, return_tensors="pt", padding=True, truncation=True)
+    
+    # Convert prompts to chat message format
+    messages_list = [[{"role": "user", "content": p}] for p in prompts]
+    
+    # Apply chat template with thinking mode control
+    # This creates the full prompt string including special tokens
+    processed_prompts = [
+        tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+            enable_thinking=enable_thinking
+        ) for messages in messages_list
+    ]
+
+    tokenized = tokenizer(processed_prompts, return_tensors="pt", padding=True, truncation=True)
     
     # Base generation arguments
     base_gen_kwargs = {
@@ -516,17 +531,6 @@ def pad_sequences_for_batch(full_sequences, generated_tokens, batch_size, pad_to
     
     return input_ids, actions
 
-def sample_and_reward(model, tokenizer, batch_size, prompts, max_new_tokens, pad):
-    # Generate completions using the model
-    completions = generate_and_decode(model, tokenizer, prompts, max_new_tokens)
-    
-    # Create the batch from prompts and generated completions
-    input_ids, actions, rewards, prompt_length, pad_token_id = _create_batch_from_prompts(
-        prompts, completions, tokenizer, batch_size, pad
-    )
-    
-    return input_ids, actions, rewards, prompt_length, pad_token_id, prompts, completions
-
 def sample_and_revise_math_batch(
     model, 
     tokenizer, 
@@ -573,14 +577,22 @@ The revised completion should be in the format: <think>chain-of-thought</think> 
         revision_prompts,
         max_new_tokens,
         disable_adapter=disable_adapter,
+        enable_thinking=enable_thinking,
     )
+
+    # Use revised final answers only if thinking mode is enabled, otherwise use original completions
+    if enable_thinking:
+        # Extract just the final answer (not the thinking content) from revised completions
+        final_completions = [parse_completion(completion)[1] for completion in revised_completions]
+    else:
+        final_completions = revised_completions
     
     # Create the batch from prompts and generated completions
     input_ids, actions, rewards, prompt_length, pad_token_id = _create_batch_from_prompts(
-        prompts, revised_completions, tokenizer, batch_size, pad
+        prompts, final_completions, tokenizer, batch_size, pad
     )
     
-    return input_ids, actions, rewards, prompt_length, pad_token_id, prompts, revised_completions
+    return input_ids, actions, rewards, prompt_length, pad_token_id, prompts, final_completions
 
 
 def sample_math_batch(model, tokenizer, batch_size: int = 4, max_new_tokens: int = 512, pad: bool = True):
@@ -593,8 +605,16 @@ def sample_math_batch(model, tokenizer, batch_size: int = 4, max_new_tokens: int
     
     # Extract prompts (all the same now)
     prompts = [problem["prompt"] for problem in problems]
+
+    # Generate completions using the model
+    completions = generate_and_decode(model, tokenizer, prompts, max_new_tokens, enable_thinking=True)
     
-    return sample_and_reward(model, tokenizer, batch_size, prompts, max_new_tokens, pad=pad)
+    # Create the batch from prompts and generated completions
+    input_ids, actions, rewards, prompt_length, pad_token_id = _create_batch_from_prompts(
+        prompts, completions, tokenizer, batch_size, pad
+    )
+    
+    return input_ids, actions, rewards, prompt_length, pad_token_id, prompts, completions
 
 
 def evaluate_model(model, tokenizer, eval_dataset, max_new_tokens=512, batch_size=12):
