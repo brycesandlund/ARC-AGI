@@ -262,6 +262,7 @@ class GRPOTrainer:
         eval_dataset: Optional[Any] = None,
         use_wandb: bool = False,
         kl_threshold: float = 0.02,
+        use_revision: bool = False,
     ) -> Dict[str, Any]:
         """Train the model using GRPO.
         
@@ -275,6 +276,7 @@ class GRPOTrainer:
         eval_dataset : optional dataset for evaluation
         use_wandb : whether to log to wandb
         kl_threshold : KL divergence threshold for early stopping
+        use_revision : whether to use revision model for sampling
         
         Returns
         -------
@@ -294,7 +296,19 @@ class GRPOTrainer:
         # Main training loop
         for episode in range(1, steps // epochs_per_batch + 1):
             # Sample once (expensive)
-            batch = sample_math_batch(self.model, tokenizer, batch_size=batch_size, max_new_tokens=max_new_tokens)
+            if use_revision:
+                batch = sample_and_revise_math_batch(
+                    model=self.model,
+                    tokenizer=tokenizer,
+                    revision_model=self.model,
+                    batch_size=batch_size,
+                    max_new_tokens=max_new_tokens,
+                    pad=True,
+                    disable_adapter=False,
+                    enable_thinking=False
+                )
+            else:
+                batch = sample_math_batch(self.model, tokenizer, batch_size=batch_size, max_new_tokens=max_new_tokens)
             input_ids, actions, rewards, prompt_length, pad_token_id, prompts, completions = batch
             
             # Track batch rewards
@@ -477,11 +491,6 @@ def _create_batch_from_prompts(prompts, completions, tokenizer, batch_size, pad)
         
     return input_ids, actions, rewards, prompt_length, pad_token_id
 
-
-# ---------------------------------------------------------------------------
-# Math environment using 24-game problems
-# ---------------------------------------------------------------------------
-
 def pad_sequences_for_batch(full_sequences, generated_tokens, batch_size, pad_token_id):
     """Pad sequences to same length for batch processing.
     
@@ -564,7 +573,7 @@ def sample_and_revise_math_batch(
 Problem and solution:
 "{full_sequence_text}"
 
-Your task is to revise the chain-of-thought (content in <think> tags) to be more concise and possibly the final answer. Keep all tokens in the chain-of-thought that are helpful to achieving the correct answer. Eliminate dead ends.
+Your task is to revise the chain-of-thought (content in <think> tags) to be more concise and possibly change/complete the final answer. Keep all tokens in the chain-of-thought that are helpful to achieving the correct answer. Eliminate dead ends.
 
 The revised completion should be in the format: <think>chain-of-thought</think> answer.
 """
@@ -716,6 +725,9 @@ def main():
     # KL threshold configuration
     parser.add_argument("--kl_threshold", type=float, default=0.02, help="KL divergence threshold for early stopping")
     
+    # Revision configuration
+    parser.add_argument("--use_revision", action="store_true", default=False, help="Use revision model to revise completions during sampling.")
+    
     # Learning rate scheduler configuration
     parser.add_argument("--lr_schedule", action="store_true", default=True, help="Use linear learning rate decay")
     parser.add_argument("--min_lr_ratio", type=float, default=0.1, help="Minimum learning rate as ratio of initial LR (default: 0.1 = 10% of initial LR)")
@@ -817,6 +829,7 @@ def main():
         eval_dataset=eval_dataset,
         use_wandb=args.use_wandb,
         kl_threshold=args.kl_threshold,
+        use_revision=args.use_revision,
     )
 
     print("Training complete!")
