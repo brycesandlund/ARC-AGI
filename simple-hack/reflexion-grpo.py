@@ -555,43 +555,32 @@ def sample_and_revise_math_batch(
         # For revision, we can just use the initial completion's reward, though it's not strictly necessary.
         # Here, we will just pass a placeholder since the prompt is about revision.
         # A more advanced implementation could use the reward to guide revision.
-        
-        thinking_instruction = "First, provide a step-by-step thinking process on how to improve the solution. Then, provide the revised solution in the specified format." if enable_thinking else ""
-        
+                
         revision_prompt = f"""The following is a solution to a math problem.
 Problem and solution:
 "{full_sequence_text}"
 
-Your task is to revise the solution to be more concise and to achieve a correct answer. If the solution is already correct and concise, simply output the original solution.
-{thinking_instruction}
+Your task is to revise the chain-of-thought (content in <think> tags) to be more concise and possibly the final answer. Keep all tokens in the chain-of-thought that are helpful to achieving the correct answer. Eliminate dead ends.
 
-Respond with the revised solution only, inside <solution> tags. For example: <solution>YOUR REVISED SOLUTION</solution>
+The revised completion should be in the format: <think>chain-of-thought</think> answer.
 """
         revision_prompts.append(revision_prompt)
     
-    # Generate revised outputs
-    revised_outputs = generate_and_decode(
+    # Generate revised completions
+    revised_completions = generate_and_decode(
         revision_model,
         tokenizer,
         revision_prompts,
         max_new_tokens,
         disable_adapter=disable_adapter,
     )
-
-    # Parse the <solution> tags
-    revised_completions = []
-    for output in revised_outputs:
-        if "<solution>" in output and "</solution>" in output:
-            start = output.find("<solution>") + len("<solution>")
-            end = output.find("</solution>")
-            solution = output[start:end].strip()
-            revised_completions.append(solution)
-        else:
-            # Fallback if the model doesn't follow instructions
-            revised_completions.append(output.strip())
-
-    # 3. Create final batch from original prompts and revised completions
-    return _create_batch_from_prompts(prompts, revised_completions, tokenizer, batch_size, pad)
+    
+    # Create the batch from prompts and generated completions
+    input_ids, actions, rewards, prompt_length, pad_token_id = _create_batch_from_prompts(
+        prompts, revised_completions, tokenizer, batch_size, pad
+    )
+    
+    return input_ids, actions, rewards, prompt_length, pad_token_id, prompts, revised_completions
 
 
 def sample_math_batch(model, tokenizer, batch_size: int = 4, max_new_tokens: int = 512, pad: bool = True):
