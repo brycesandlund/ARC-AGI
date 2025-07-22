@@ -499,6 +499,131 @@ def sample_and_reward(model, tokenizer, batch_size, prompts, max_new_tokens, pad
     
     return input_ids, actions, rewards, prompt_length, pad_token_id
 
+def sample_and_revise_math_batch(
+    model, 
+    tokenizer, 
+    revision_model,
+    batch_size: int, 
+    max_new_tokens: int, 
+    pad: bool, 
+    disable_adapter: bool, 
+    enable_thinking: bool
+):
+    """
+    Samples a batch, revises it, and returns the revised batch.
+    1. Sample a batch of completions from the base model.
+    2. Use a revision model to revise the completions.
+    3. Return the revised completions and their rewards.
+    """
+    # 1. Generate one math problem and use it for all batch elements
+    problem_generator = generate_math_problems(tokenizer, 1)
+    single_problem = next(problem_generator)
+    problems = [single_problem for _ in range(batch_size)]
+    prompts = [problem["prompt"] for problem in problems]
+
+    # 2. First pass: Sample from the base model
+    tokenized_prompts = tokenizer(prompts, return_tensors="pt", padding=True, truncation=True)
+    prompt_input_ids = tokenized_prompts["input_ids"]
+    prompt_attention_mask = tokenized_prompts["attention_mask"]
+    
+    generated = generate_with_cache(
+        model,
+        input_ids=prompt_input_ids.to(model.device),
+        attention_mask=prompt_attention_mask.to(model.device),
+        max_new_tokens=max_new_tokens,
+        temperature=0.7,
+        do_sample=True,
+        pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id,
+        repetition_penalty=1.1
+    )
+    
+    prompt_length = prompt_input_ids.shape[1]
+    generated_tokens = generated[:, prompt_length:]
+    initial_completions = [tokenizer.decode(gen, skip_special_tokens=True) for gen in generated_tokens]
+    initial_rewards = torch.tensor(math_reward_func(initial_completions, prompts), dtype=torch.float32)
+
+    # 3. Second pass: Revise with the revision_model
+    revision_prompts = []
+    for i in range(batch_size):
+        full_sequence_text = prompts[i] + initial_completions[i]
+        reward_val = initial_rewards[i].item()
+        
+        thinking_instruction = "First, provide a step-by-step thinking process on how to improve the solution. Then, provide the revised solution in the specified format." if enable_thinking else ""
+        
+        revision_prompt = f"""The following is a solution to a math problem.
+Problem and solution:
+"{full_sequence_text}"
+Reward: {reward_val}
+
+The reward is based on correctness. A reward of 1000 means a correct solution.
+Your task is to revise the solution to be more concise and to achieve a higher reward. If the solution is already correct and concise, simply output the original solution.
+{thinking_instruction}
+
+Respond with the revised solution only, inside <solution> tags. For example: <solution>YOUR REVISED SOLUTION</solution>
+"""
+        revision_prompts.append(revision_prompt)
+    
+    tokenized_revision_prompts = tokenizer(revision_prompts, return_tensors="pt", padding=True, truncation=True)
+
+    gen_kwargs = {
+        "input_ids": tokenized_revision_prompts["input_ids"].to(revision_model.device),
+        "attention_mask": tokenized_revision_prompts["attention_mask"].to(revision_model.device),
+        "max_new_tokens": max_new_tokens,
+        "temperature": 0.7,
+        "do_sample": True,
+        "pad_token_id": tokenizer.pad_token_id or tokenizer.eos_token_id,
+        "repetition_penalty": 1.1,
+    }
+
+    if disable_adapter and hasattr(revision_model, "disable_adapter"):
+        with revision_model.disable_adapter(): # type: ignore[attr-defined]
+            revised_generated = generate_with_cache(revision_model, **gen_kwargs)
+    else:
+        revised_generated = generate_with_cache(revision_model, **gen_kwargs)
+
+    revised_prompt_length = tokenized_revision_prompts["input_ids"].shape[1]
+    revised_generated_tokens = revised_generated[:, revised_prompt_length:]
+    revised_outputs = [tokenizer.decode(gen, skip_special_tokens=True) for gen in revised_generated_tokens]
+
+    revised_completions = []
+    for output in revised_outputs:
+        if "<solution>" in output and "</solution>" in output:
+            start = output.find("<solution>") + len("<solution>")
+            end = output.find("</solution>")
+            solution = output[start:end].strip()
+            revised_completions.append(solution)
+        else:
+            revised_completions.append(output.strip())
+
+    # 4. Calculate final rewards and prepare outputs
+    final_rewards = torch.tensor(math_reward_func(revised_completions, prompts), dtype=torch.float32)
+    pad_token_id = tokenizer.pad_token_id or tokenizer.eos_token_id
+
+    full_sequences_final = []
+    actions_final = []
+    
+    tokenized_prompts_list = tokenizer(prompts, padding=False, truncation=True)['input_ids']
+    tokenized_revisions_list = tokenizer(revised_completions, padding=False, truncation=True)['input_ids']
+    
+    for i in range(batch_size):
+        prompt_toks = torch.tensor(tokenized_prompts_list[i], dtype=torch.long)
+        revised_toks = torch.tensor(tokenized_revisions_list[i], dtype=torch.long)
+        full_seq = torch.cat([prompt_toks, revised_toks])
+        full_sequences_final.append(full_seq)
+        actions_final.append(revised_toks)
+
+    final_input_ids, final_actions = full_sequences_final, actions_final
+    if pad:
+        final_input_ids, final_actions = pad_sequences_for_batch(
+            full_sequences_final, 
+            actions_final, 
+            batch_size, 
+            pad_token_id
+        )
+
+    return final_input_ids, final_actions, final_rewards, prompt_length, pad_token_id
+
+
 def sample_math_batch(model, tokenizer, batch_size: int = 4, max_new_tokens: int = 512, pad: bool = True):
     """Generate a batch of math problems and model completions for GRPO training."""
     
