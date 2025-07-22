@@ -184,8 +184,13 @@ class GRPOTrainer:
         # New log-probabilities for gradient flow
         new_logp = self._old_log_probs(logits, target_actions)
 
-        # Create mask to ignore padding tokens in loss calculations
-        mask = (target_actions != pad_token_id)
+        # Create mask to ignore padding tokens in loss calculations.
+        # The mask should include all real tokens and the first pad/EOS token,
+        # but exclude all subsequent padding tokens.
+        is_pad = (target_actions == pad_token_id)
+        # The cumulative sum will be 0 for real tokens, 1 for the first pad
+        # token, and >1 for subsequent pad tokens. We keep everything <= 1.
+        mask = torch.cumsum(is_pad.to(torch.int), dim=1) <= 1
 
         # # Debug logging for log-probs
         # print("[DEBUG] old_logp: mean={:.4f}, std={:.4f}, min={:.4f}, max={:.4f}".format(
