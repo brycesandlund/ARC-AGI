@@ -748,7 +748,7 @@ def main():
         help="HuggingFace model identifier.",
     )
     parser.add_argument("--lr", type=float, default=1e-5, help="Learning rate")
-    parser.add_argument("--steps", type=int, default=10, help="Number of optimisation steps")
+    parser.add_argument("--steps", type=int, default=40, help="Total number of optimization steps.")
     parser.add_argument("--batch_size", type=int, default=8, help="Batch size (can be increased with LoRA)")
     parser.add_argument("--clip_ratio", type=float, default=0.2, help="PPO-style clip ratio")
     parser.add_argument("--kl_coef", type=float, default=0.01, help="KL penalty coefficient")
@@ -838,8 +838,13 @@ def main():
         # Without LoRA, we must create a deep copy for the reference model
         ref_model = copy.deepcopy(model)
 
-    total_optim_steps = args.steps * args.optim_epochs
+    # The user now provides total optimization steps directly.
+    total_optim_steps = args.steps
+    
+    # Calculate the number of data collection cycles.
+    collection_steps = math.ceil(total_optim_steps / args.optim_epochs)
     print(f"Total optimization steps: {total_optim_steps}")
+    print(f"Data collection steps: {collection_steps} (total_optim_steps / optim_epochs)")
 
     trainer = GRPOTrainer(
         model,
@@ -877,7 +882,7 @@ def main():
     # Run training using the new train method
     training_results = trainer.train(
         tokenizer=tokenizer,
-        steps=args.steps,
+        steps=collection_steps,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         optim_epochs=args.optim_epochs,
         batch_size=args.batch_size,
