@@ -295,7 +295,7 @@ class GRPOTrainer:
             step_rewards_max = []
             step_success_rates = []
 
-            print(f"\nCollecting experience for step {step}/{steps}...")
+            print(f"\nCollecting experience for collection step {step}/{steps}...")
             for micro_step in range(gradient_accumulation_steps):
                 # Sample a fresh batch for each accumulation step
                 if use_revision:
