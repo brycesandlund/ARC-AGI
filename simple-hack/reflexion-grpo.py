@@ -381,6 +381,9 @@ class GRPOTrainer:
                     torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
                     self.optimizer.step()
                     
+                    # Capture LR before scheduler step for accurate logging
+                    current_lr = self.optimizer.param_groups[0]['lr']
+                    
                     # Step the learning rate scheduler
                     if self.scheduler is not None:
                         self.scheduler.step()
@@ -396,8 +399,6 @@ class GRPOTrainer:
                     avg_reward_max = minibatch_rewards.max().item()
                     avg_success_rate = (minibatch_rewards > 0).float().mean().item()
                     
-                    current_lr = self.optimizer.param_groups[0]['lr']
-
                     if use_wandb:
                         wandb.log({
                             "train/loss": avg_loss,
@@ -412,8 +413,11 @@ class GRPOTrainer:
                             "epoch_per_batch": epoch + 1,
                         })
                     
+                    minibatch_num = i // minibatch_size + 1
+                    total_minibatches = math.ceil(len(experience_buffer) / minibatch_size)
+                    
                     print(
-                        f"Optim Step {total_optim_steps:05d} | Collection Step {step}/{collection_steps}, Epoch {epoch+1}/{epochs_per_batch} | "
+                        f"Optim Step {total_optim_steps:05d} | Collection Step {step}/{collection_steps}, Epoch {epoch+1}/{epochs_per_batch}, MiniBatch {minibatch_num}/{total_minibatches} | "
                         f"loss: {avg_loss:.4f} | "
                         f"kl: {avg_kl:.4f} | "
                         f"lr: {current_lr:.2e} | "
