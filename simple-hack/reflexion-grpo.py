@@ -299,7 +299,7 @@ class GRPOTrainer:
             for micro_step in range(batch_size):
                 # Sample a fresh batch for each accumulation step
                 if use_revision:
-                    batch = sample_and_revise_math_batch(
+                    batch = sample_and_revise(
                         model=self.model,
                         tokenizer=tokenizer,
                         revision_model=self.model,
@@ -310,7 +310,7 @@ class GRPOTrainer:
                         enable_thinking=False
                     )
                 else:
-                    batch = sample_math_batch(self.model, tokenizer, rollouts_per_prompt=rollouts_per_prompt, max_new_tokens=max_new_tokens)
+                    batch = sample(self.model, tokenizer, rollouts_per_prompt=rollouts_per_prompt, max_new_tokens=max_new_tokens)
                 
                 input_ids, actions, rewards, prompt_length, pad_token_id, _, _ = batch
                 
@@ -591,7 +591,7 @@ def pad_sequences_for_batch(full_sequences, generated_tokens, rollouts_per_promp
     
     return input_ids, actions
 
-def sample_and_revise_math_batch(
+def sample_and_revise(
     model, 
     tokenizer, 
     revision_model,
@@ -608,7 +608,7 @@ def sample_and_revise_math_batch(
     3. Return the revised completions and their rewards.
     """
     # 1. First pass: Sample from the base model to get initial solutions
-    _, _, _, _, _, prompts, initial_completions = sample_math_batch(
+    _, _, _, _, _, prompts, initial_completions = sample(
         model, tokenizer, rollouts_per_prompt, max_new_tokens, pad=True
     )
 
@@ -655,7 +655,7 @@ The revised completion should be in the format: <think>chain-of-thought</think> 
     return input_ids, actions, rewards, prompt_length, pad_token_id, prompts, final_completions
 
 
-def sample_math_batch(model, tokenizer, rollouts_per_prompt: int = 4, max_new_tokens: int = 512, pad: bool = True):
+def sample(model, tokenizer, rollouts_per_prompt: int = 4, max_new_tokens: int = 512, pad: bool = True):
     """Generate a batch of math problems and model completions for GRPO training."""
     
     # Generate one math problem and use it for all batch elements
