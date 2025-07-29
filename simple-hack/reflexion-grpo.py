@@ -85,9 +85,9 @@ class GRPOTrainer:
             pg_losses = torch.max(pg_loss1, pg_loss2)
             
             # Debug: policy gradient loss statistics before mean, using mask
-            print(f"[DEBUG PG] pg_loss1: mean={pg_loss1[mask].mean().item():.4f}, std={pg_loss1[mask].std().item():.4f}, min={pg_loss1[mask].min().item():.4f}, max={pg_loss1[mask].max().item():.4f}")
-            print(f"[DEBUG PG] pg_loss2: mean={pg_loss2[mask].mean().item():.4f}, std={pg_loss2[mask].std().item():.4f}, min={pg_loss2[mask].min().item():.4f}, max={pg_loss2[mask].max().item():.4f}")
-            print(f"[DEBUG PG] final_pg_losses: mean={pg_losses[mask].mean().item():.4f}, std={pg_losses[mask].std().item():.4f}, min={pg_losses[mask].min().item():.4f}, max={pg_losses[mask].max().item():.4f}")
+            # print(f"[DEBUG PG] pg_loss1: mean={pg_loss1[mask].mean().item():.4f}, std={pg_loss1[mask].std().item():.4f}, min={pg_loss1[mask].min().item():.4f}, max={pg_loss1[mask].max().item():.4f}")
+            # print(f"[DEBUG PG] pg_loss2: mean={pg_loss2[mask].mean().item():.4f}, std={pg_loss2[mask].std().item():.4f}, min={pg_loss2[mask].min().item():.4f}, max={pg_loss2[mask].max().item():.4f}")
+            # print(f"[DEBUG PG] final_pg_losses: mean={pg_losses[mask].mean().item():.4f}, std={pg_losses[mask].std().item():.4f}, min={pg_losses[mask].min().item():.4f}, max={pg_losses[mask].max().item():.4f}")
             
             # Count clipping statistics, using mask
             clipped_mask = (ratio < 1.0 - self.clip_ratio) | (ratio > 1.0 + self.clip_ratio)
@@ -111,8 +111,8 @@ class GRPOTrainer:
         kl_losses = ratio_ref - log_ratio_ref - 1
         
         # Debug: KL loss statistics, using mask
-        print(f"[DEBUG KL] log_ratio_ref: mean={log_ratio_ref[mask].mean().item():.4f}, std={log_ratio_ref[mask].std().item():.4f}, min={log_ratio_ref[mask].min().item():.4f}, max={log_ratio_ref[mask].max().item():.4f}")
-        print(f"[DEBUG KL] kl_losses: mean={kl_losses[mask].mean().item():.4f}, std={kl_losses[mask].std().item():.4f}, min={kl_losses[mask].min().item():.4f}, max={kl_losses[mask].max().item():.4f}")
+        # print(f"[DEBUG KL] log_ratio_ref: mean={log_ratio_ref[mask].mean().item():.4f}, std={log_ratio_ref[mask].std().item():.4f}, min={log_ratio_ref[mask].min().item():.4f}, max={log_ratio_ref[mask].max().item():.4f}")
+        # print(f"[DEBUG KL] kl_losses: mean={kl_losses[mask].mean().item():.4f}, std={kl_losses[mask].std().item():.4f}, min={kl_losses[mask].min().item():.4f}, max={kl_losses[mask].max().item():.4f}")
         
         return kl_losses[mask].mean()
 
@@ -854,9 +854,12 @@ def main():
 
     # The user now provides total optimization steps directly.
     total_optim_steps = args.steps
+
+    # Updates per epoch
+    updates_per_epoch = args.batch_size / args.minibatch_size
     
     # Calculate the number of data collection cycles.
-    collection_steps = math.ceil(total_optim_steps / args.epochs_per_batch)
+    collection_steps = math.ceil(total_optim_steps / args.epochs_per_batch / updates_per_epoch)
     print(f"Total optimization steps: {total_optim_steps}")
     print(f"Data collection steps: {collection_steps} (total_optim_steps / epochs_per_batch)")
 
