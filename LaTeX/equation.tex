@@ -1,0 +1,101 @@
+\documentclass[11pt,letterpaper]{article}
+\usepackage{floatrow}
+\usepackage{amsmath}
+\usepackage{amsthm}
+\usepackage{amssymb}
+\usepackage{amsfonts}
+\usepackage{color}
+%\usepackage{hyperref}
+\usepackage{algorithm}
+\usepackage{caption}
+\usepackage{MnSymbol}
+\usepackage{url}
+\usepackage[margin=1in]{geometry}
+\usepackage[labelfont=bf,font=small,margin=1em]{caption} %font of captions
+\usepackage{mathtools}
+\usepackage{refcount}
+\usepackage[shortlabels]{enumitem}
+
+\usepackage{tikz}
+\usetikzlibrary{shapes,snakes}
+\usetikzlibrary{arrows.meta,automata,positioning,arrows}
+
+\newcommand{\Z}{\mathbb{Z}}
+\newcommand{\N}{\mathbb{N}}
+\newcommand{\C}{\mathbb{C}}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\Q}{\mathbb{Q}}
+\renewcommand{\Pr}[1]{{\mathop{\text{Pr}}\left[#1\right]}}
+\newcommand{\Ex}[1]{{\mathop{\mathbb{E}}\left[#1\right]}}
+\newcommand{\todo}[1]{{\bf \color{red} TODO: #1}}
+
+\newtheorem*{claim}{Claim}
+\newtheorem{theorem}{Theorem}
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{corollary}[theorem]{Corollary}
+\newtheorem{conjecture}[theorem]{Conjecture}
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{definition}[theorem]{Definition}
+\newtheorem{notation}[theorem]{Notation}
+\newtheorem{example}[theorem]{Example}
+\newtheorem{remark}[theorem]{Remark}
+\newtheorem{problem}[theorem]{Problem}
+\newtheorem{acknowledgment}[]{Acknowledgment}
+
+\title{}
+\author{}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\[
+KL[\pi_{\theta_{old}} || \pi_{\theta}] = \underset{o \sim \pi_{\theta_{old}}}{\mathbb{E}} \log\left(\frac{\pi_{\theta_{old}}(o|\text{context})}{\pi_{\theta}(o|\text{context})}\right)
+\]
+
+% \[
+% KL[\pi_{\theta} || \pi_{ref}] = \underset{o \sim \pi_{\theta}}{\mathbb{E}} \log\left(\frac{\pi_{\theta}(o|\text{context})}{\pi_{ref}(o|\text{context})}\right) 
+% \]
+
+\[
+KL[\pi_{\theta} || \pi_{ref}] = \underset{o \sim \pi_{\theta}}{\mathbb{E}} \left[ \frac{\pi_{ref}(o|\text{context})}{\pi_{\theta}(o|\text{context})} - \log\left(\frac{\pi_{ref}(o|\text{context})}{\pi_{\theta}(o|\text{context})}\right) - 1 \right]
+\]
+
+% \[
+% \mathbb{D}_{KL}[\pi_{\theta} || \pi_{ref}] = \frac{\pi_{ref}(o_{i,t}|q, o_{i,<t})}{\pi_{\theta}(o_{i,t}|q, o_{i,<t})} - \log\left(\frac{\pi_{ref}(o_{i,t}|q, o_{i,<t})}{\pi_{\theta}(o_{i,t}|q, o_{i,<t})}\right) - 1
+% \]
+
+\[
+    A_o = \frac{r_i - \operatorname{mean}(\mathbf{r})}{\operatorname{std}(\mathbf{r})}
+    \quad
+    \propto\ =\ \frac{1}{G} \cdot \frac{1}{\text{output length}}
+\]
+
+\[
+    A_o = \mathbf{r}_i - \operatorname{mean}(\mathbf{r}) 
+    \quad
+    \propto\ =\ \frac{1}{G} \cdot \frac{1}{\text{max length}}
+\]
+
+\[
+    \propto\ =\ \frac{1}{G} \cdot \frac{1}{\text{output length}}
+\]
+
+\[
+    \propto\ =\ \frac{1}{G} \cdot \frac{1}{\text{max length}}
+\]
+
+\[
+\propto \sum_{\text{token } o} \operatorname{clip}\left(\frac{\pi_{\theta}(o|\text{context})}{\pi_{\theta_{old}}(o|\text{context})}\right) A_o - \beta KL[\pi_{\theta} \| \pi_{ref}]
+\]
+
+\begin{equation*}
+\frac{1}{G} \sum_{i=1}^{G} \frac{1}{|o_i|} \sum_{t=1}^{|o_i|} \left\{ \min \left[ \frac{\pi_{\theta}(o_{i,t}|q, o_{i,<t})}{\pi_{\theta_{old}}(o_{i,t}|q, o_{i,<t})} \hat{A}_{i,t}, \operatorname{clip}\left(\frac{\pi_{\theta}(o_{i,t}|q, o_{i,<t})}{\pi_{\theta_{old}}(o_{i,t}|q, o_{i,<t})}, 1-\epsilon, 1+\epsilon\right) \hat{A}_{i,t} \right] - \beta KL[\pi_{\theta} \| \pi_{ref}] \right\}
+\end{equation*}
+
+
+\bibliographystyle{alpha}
+\bibliography{ref}
+
+\end{document}
+
