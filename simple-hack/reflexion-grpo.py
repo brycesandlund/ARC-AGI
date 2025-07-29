@@ -389,9 +389,12 @@ class GRPOTrainer:
                     avg_loss = sum(minibatch_losses) / len(minibatch_losses)
                     avg_pg_loss = sum(minibatch_pg_losses) / len(minibatch_pg_losses)
                     avg_kl = sum(minibatch_kls) / len(minibatch_kls)
-                    avg_reward_mean = sum(step_rewards_mean) / len(step_rewards_mean)
-                    avg_reward_max = sum(step_rewards_max) / len(step_rewards_max)
-                    avg_success_rate = sum(step_success_rates) / len(step_success_rates)
+                    
+                    # Compute reward metrics from the current minibatch
+                    minibatch_rewards = torch.cat([data['rewards'] for data in minibatch])
+                    avg_reward_mean = minibatch_rewards.mean().item()
+                    avg_reward_max = minibatch_rewards.max().item()
+                    avg_success_rate = (minibatch_rewards > 0).float().mean().item()
                     
                     current_lr = self.optimizer.param_groups[0]['lr']
 
