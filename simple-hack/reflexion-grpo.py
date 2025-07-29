@@ -247,7 +247,7 @@ class GRPOTrainer:
     def train(
         self,
         tokenizer: Any,
-        steps: int,
+        collection_steps: int,
         batch_size: int,
         epochs_per_batch: int,
         rollouts_per_prompt: int,
@@ -290,7 +290,7 @@ class GRPOTrainer:
         self.model.train()
         
         # Main training loop (steps are now data collection cycles)
-        for step in range(1, steps + 1):
+        for step in range(1, collection_steps + 1):
             
             # --- 1. Data Collection Phase ---
             experience_buffer = []
@@ -298,7 +298,7 @@ class GRPOTrainer:
             step_rewards_max = []
             step_success_rates = []
 
-            print(f"\nCollecting experience for collection step {step}/{steps}...")
+            print(f"\nCollecting experience for collection step {step}/{collection_steps}...")
             for micro_step in range(batch_size):
                 # Sample a fresh batch for each accumulation step
                 if use_revision:
@@ -410,7 +410,7 @@ class GRPOTrainer:
                         })
                     
                     print(
-                        f"Optim Step {total_optim_steps:05d} | Collection Step {step}/{steps}, Epoch {epoch+1}/{epochs_per_batch} | "
+                        f"Optim Step {total_optim_steps:05d} | Collection Step {step}/{collection_steps}, Epoch {epoch+1}/{epochs_per_batch} | "
                         f"loss: {avg_loss:.4f} | "
                         f"kl: {avg_kl:.4f} | "
                         f"lr: {current_lr:.2e} | "
@@ -896,7 +896,7 @@ def main():
     # Run training using the new train method
     training_results = trainer.train(
         tokenizer=tokenizer,
-        steps=collection_steps,
+        collection_steps=collection_steps,
         batch_size=args.batch_size,
         epochs_per_batch=args.epochs_per_batch,
         rollouts_per_prompt=args.rollouts_per_prompt,
