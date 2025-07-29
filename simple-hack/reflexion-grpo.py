@@ -247,7 +247,7 @@ class GRPOTrainer:
         self,
         tokenizer: Any,
         steps: int,
-        gradient_accumulation_steps: int,
+        batch_size: int,
         optim_epochs: int,
         rollouts_per_prompt: int,
         max_new_tokens: int,
@@ -262,7 +262,7 @@ class GRPOTrainer:
         ----------
         tokenizer : tokenizer for the model
         steps : total number of optimization steps
-        gradient_accumulation_steps : number of batches to accumulate gradients over
+        batch_size : Number of prompts to use for experience generation in each collection step.
         optim_epochs : number of optimization epochs to run on each collected batch of experience
         rollouts_per_prompt : number of rollouts to generate for each prompt
         max_new_tokens : maximum new tokens to generate
@@ -296,7 +296,7 @@ class GRPOTrainer:
             step_success_rates = []
 
             print(f"\nCollecting experience for collection step {step}/{steps}...")
-            for micro_step in range(gradient_accumulation_steps):
+            for micro_step in range(batch_size):
                 # Sample a fresh batch for each accumulation step
                 if use_revision:
                     batch = sample_and_revise_math_batch(
@@ -333,7 +333,7 @@ class GRPOTrainer:
                 step_rewards_mean.append(batch_reward_mean)
                 step_rewards_max.append(rewards.max().item())
                 step_success_rates.append((rewards > 0).float().mean().item())
-                print(f"  Collected micro-batch {micro_step+1}/{gradient_accumulation_steps} | reward: {batch_reward_mean:.3f}")
+                print(f"  Collected micro-batch {micro_step+1}/{batch_size} | reward: {batch_reward_mean:.3f}")
             
             # --- 2. Optimization Phase ---
             for epoch in range(optim_epochs):
@@ -753,7 +753,7 @@ def main():
     parser.add_argument("--clip_ratio", type=float, default=0.2, help="PPO-style clip ratio")
     parser.add_argument("--kl_coef", type=float, default=0.01, help="KL penalty coefficient")
     parser.add_argument("--max_new_tokens", type=int, default=1200, help="Maximum new tokens to generate")
-    parser.add_argument("--gradient_accumulation_steps", type=int, default=1, help="Number of batches to accumulate gradients over before performing an optimizer step")
+    parser.add_argument("--batch_size", type=int, default=1, help="Number of prompts to sample from for each optimization step.")
     parser.add_argument("--optim_epochs", type=int, default=4, help="Number of optimization epochs to run on each collected batch of experience")
     
     # LoRA configuration
@@ -883,7 +883,7 @@ def main():
     training_results = trainer.train(
         tokenizer=tokenizer,
         steps=collection_steps,
-        gradient_accumulation_steps=args.gradient_accumulation_steps,
+        batch_size=args.batch_size,
         optim_epochs=args.optim_epochs,
         rollouts_per_prompt=args.rollouts_per_prompt,
         max_new_tokens=args.max_new_tokens,
