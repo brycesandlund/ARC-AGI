@@ -249,7 +249,7 @@ class GRPOTrainer:
         steps: int,
         gradient_accumulation_steps: int,
         optim_epochs: int,
-        batch_size: int,
+        rollouts_per_prompt: int,
         max_new_tokens: int,
         eval_dataset: Optional[Any] = None,
         use_wandb: bool = False,
@@ -264,7 +264,7 @@ class GRPOTrainer:
         steps : total number of optimization steps
         gradient_accumulation_steps : number of batches to accumulate gradients over
         optim_epochs : number of optimization epochs to run on each collected batch of experience
-        batch_size : batch size for training
+        rollouts_per_prompt : number of rollouts to generate for each prompt
         max_new_tokens : maximum new tokens to generate
         eval_dataset : optional dataset for evaluation
         use_wandb : whether to log to wandb
@@ -303,14 +303,14 @@ class GRPOTrainer:
                         model=self.model,
                         tokenizer=tokenizer,
                         revision_model=self.model,
-                        batch_size=batch_size,
+                        rollouts_per_prompt=rollouts_per_prompt,
                         max_new_tokens=max_new_tokens,
                         pad=True,
                         disable_adapter=False,
                         enable_thinking=False
                     )
                 else:
-                    batch = sample_math_batch(self.model, tokenizer, batch_size=batch_size, max_new_tokens=max_new_tokens)
+                    batch = sample_math_batch(self.model, tokenizer, rollouts_per_prompt=rollouts_per_prompt, max_new_tokens=max_new_tokens)
                 
                 input_ids, actions, rewards, prompt_length, pad_token_id, _, _ = batch
                 
@@ -511,7 +511,7 @@ def generate_and_decode(model, tokenizer, prompts, max_new_tokens, disable_adapt
     return completions
 
 
-def _create_batch_from_prompts(prompts, completions, tokenizer, batch_size, pad):
+def _create_batch_from_prompts(prompts, completions, tokenizer, rollouts_per_prompt, pad):
     """Create a batch for the trainer from prompts and completions."""
     rewards = torch.tensor(math_reward_func(completions, prompts), dtype=torch.float32)
     pad_token_id = tokenizer.pad_token_id or tokenizer.eos_token_id
@@ -527,7 +527,7 @@ def _create_batch_from_prompts(prompts, completions, tokenizer, batch_size, pad)
     tokenized_prompts_list = tokenizer(prompts, padding=False, truncation=True)['input_ids']
     tokenized_completions_list = tokenizer(completions, padding=False, truncation=True)['input_ids']
 
-    for i in range(batch_size):
+    for i in range(rollouts_per_prompt):
         prompt_toks = torch.tensor(tokenized_prompts_list[i], dtype=torch.long)
         completion_toks = torch.tensor(tokenized_completions_list[i], dtype=torch.long)
         
@@ -536,13 +536,13 @@ def _create_batch_from_prompts(prompts, completions, tokenizer, batch_size, pad)
         actions.append(completion_toks)
 
     if pad:
-        input_ids, actions = pad_sequences_for_batch(full_sequences, actions, batch_size, pad_token_id)
+        input_ids, actions = pad_sequences_for_batch(full_sequences, actions, rollouts_per_prompt, pad_token_id)
     else:
         input_ids = full_sequences
         
     return input_ids, actions, rewards, prompt_length, pad_token_id
 
-def pad_sequences_for_batch(full_sequences, generated_tokens, batch_size, pad_token_id):
+def pad_sequences_for_batch(full_sequences, generated_tokens, rollouts_per_prompt, pad_token_id):
     """Pad sequences to same length for batch processing.
     
     Parameters
@@ -551,8 +551,8 @@ def pad_sequences_for_batch(full_sequences, generated_tokens, batch_size, pad_to
         Full sequences (prompt + generated tokens)
     generated_tokens : list of torch.Tensor
         Generated tokens only
-    batch_size : int
-        Size of the batch
+    rollouts_per_prompt : int
+        Number of rollouts for the batch.
     pad_token_id : int
         Token ID to use for padding
         
@@ -566,7 +566,7 @@ def pad_sequences_for_batch(full_sequences, generated_tokens, batch_size, pad_to
     padded_input_ids = []
     padded_actions = []
     
-    for i in range(batch_size):
+    for i in range(rollouts_per_prompt):
         # Pad full sequences (for input_ids)
         full_seq_len = full_sequences[i].shape[0]
         if full_seq_len < max_full_len:
@@ -595,7 +595,7 @@ def sample_and_revise_math_batch(
     model, 
     tokenizer, 
     revision_model,
-    batch_size: int, 
+    rollouts_per_prompt: int, 
     max_new_tokens: int, 
     pad: bool, 
     disable_adapter: bool, 
@@ -609,12 +609,12 @@ def sample_and_revise_math_batch(
     """
     # 1. First pass: Sample from the base model to get initial solutions
     _, _, _, _, _, prompts, initial_completions = sample_math_batch(
-        model, tokenizer, batch_size, max_new_tokens, pad=True
+        model, tokenizer, rollouts_per_prompt, max_new_tokens, pad=True
     )
 
     # 2. Second pass: Construct revision prompts and revise with the revision_model
     revision_prompts = []
-    for i in range(batch_size):
+    for i in range(rollouts_per_prompt):
         full_sequence_text = prompts[i] + initial_completions[i]
         # For revision, we can just use the initial completion's reward, though it's not strictly necessary.
         # Here, we will just pass a placeholder since the prompt is about revision.
@@ -649,19 +649,19 @@ The revised completion should be in the format: <think>chain-of-thought</think> 
     
     # Create the batch from prompts and generated completions
     input_ids, actions, rewards, prompt_length, pad_token_id = _create_batch_from_prompts(
-        prompts, final_completions, tokenizer, batch_size, pad
+        prompts, final_completions, tokenizer, rollouts_per_prompt, pad
     )
     
     return input_ids, actions, rewards, prompt_length, pad_token_id, prompts, final_completions
 
 
-def sample_math_batch(model, tokenizer, batch_size: int = 4, max_new_tokens: int = 512, pad: bool = True):
+def sample_math_batch(model, tokenizer, rollouts_per_prompt: int = 4, max_new_tokens: int = 512, pad: bool = True):
     """Generate a batch of math problems and model completions for GRPO training."""
     
     # Generate one math problem and use it for all batch elements
     problem_generator = generate_math_problems(tokenizer, 1)
     single_problem = next(problem_generator)
-    problems = [single_problem for _ in range(batch_size)]
+    problems = [single_problem for _ in range(rollouts_per_prompt)]
     
     # Extract prompts (all the same now)
     prompts = [problem["prompt"] for problem in problems]
@@ -671,7 +671,7 @@ def sample_math_batch(model, tokenizer, batch_size: int = 4, max_new_tokens: int
     
     # Create the batch from prompts and generated completions
     input_ids, actions, rewards, prompt_length, pad_token_id = _create_batch_from_prompts(
-        prompts, completions, tokenizer, batch_size, pad
+        prompts, completions, tokenizer, rollouts_per_prompt, pad
     )
     
     return input_ids, actions, rewards, prompt_length, pad_token_id, prompts, completions
@@ -749,7 +749,7 @@ def main():
     )
     parser.add_argument("--lr", type=float, default=1e-5, help="Learning rate")
     parser.add_argument("--steps", type=int, default=40, help="Total number of optimization steps.")
-    parser.add_argument("--batch_size", type=int, default=8, help="Batch size (can be increased with LoRA)")
+    parser.add_argument("--rollouts_per_prompt", type=int, default=8, help="Number of rollouts per prompt.")
     parser.add_argument("--clip_ratio", type=float, default=0.2, help="PPO-style clip ratio")
     parser.add_argument("--kl_coef", type=float, default=0.01, help="KL penalty coefficient")
     parser.add_argument("--max_new_tokens", type=int, default=1200, help="Maximum new tokens to generate")
@@ -885,7 +885,7 @@ def main():
         steps=collection_steps,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         optim_epochs=args.optim_epochs,
-        batch_size=args.batch_size,
+        rollouts_per_prompt=args.rollouts_per_prompt,
         max_new_tokens=args.max_new_tokens,
         eval_dataset=eval_dataset,
         use_wandb=args.use_wandb,
