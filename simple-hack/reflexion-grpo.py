@@ -1,5 +1,6 @@
 import argparse
 import math
+import random
 from typing import List, Dict, Any, Optional
 import copy
 
@@ -255,6 +256,7 @@ class GRPOTrainer:
         use_wandb: bool = False,
         kl_threshold: float = 0.02,
         use_revision: bool = False,
+        minibatch_size: int = 1,
     ) -> Dict[str, Any]:
         """Train the model using GRPO.
         
@@ -270,6 +272,7 @@ class GRPOTrainer:
         use_wandb : whether to log to wandb
         kl_threshold : KL divergence threshold for early stopping
         use_revision : whether to use revision model for sampling
+        minibatch_size : size of minibatches for optimization
         
         Returns
         -------
@@ -337,85 +340,95 @@ class GRPOTrainer:
             
             # --- 2. Optimization Phase ---
             for epoch in range(epochs_per_batch):
-                self.optimizer.zero_grad()
+                random.shuffle(experience_buffer)  # Shuffle experience for each epoch
                 
-                epoch_losses = []
-                epoch_pg_losses = []
-                epoch_kls = []
+                # Process in minibatches
+                for i in range(0, len(experience_buffer), minibatch_size):
+                    minibatch = experience_buffer[i:i+minibatch_size]
+                    
+                    self.optimizer.zero_grad()
+                    
+                    minibatch_losses = []
+                    minibatch_pg_losses = []
+                    minibatch_kls = []
 
-                # Iterate over the collected experience
-                for micro_batch_data in experience_buffer:
-                    # Compute loss for the micro-batch using the pre-computed old_logp
-                    metrics = self.compute_loss(
-                        input_ids=micro_batch_data['input_ids'],
-                        actions=micro_batch_data['actions'],
-                        rewards=micro_batch_data['rewards'],
-                        prompt_length=micro_batch_data['prompt_length'],
-                        pad_token_id=micro_batch_data['pad_token_id'],
-                        old_logp=micro_batch_data['old_logp']
+                    # Iterate over the collected experience in the minibatch
+                    for micro_batch_data in minibatch:
+                        # Compute loss for the micro-batch using the pre-computed old_logp
+                        metrics = self.compute_loss(
+                            input_ids=micro_batch_data['input_ids'],
+                            actions=micro_batch_data['actions'],
+                            rewards=micro_batch_data['rewards'],
+                            prompt_length=micro_batch_data['prompt_length'],
+                            pad_token_id=micro_batch_data['pad_token_id'],
+                            old_logp=micro_batch_data['old_logp']
+                        )
+                        loss = metrics['loss']
+                        
+                        # Normalize loss for accumulation across the minibatch
+                        loss = loss / len(minibatch)
+                        
+                        # Accumulate gradients
+                        loss.backward()
+
+                        # Store metrics for logging
+                        minibatch_losses.append(loss.item() * len(minibatch))
+                        minibatch_pg_losses.append(metrics['pg_loss'])
+                        minibatch_kls.append(metrics['kl_loss'])
+                    
+                    # Clip gradients and perform optimizer step after accumulating over the whole minibatch
+                    total_optim_steps += 1
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+                    self.optimizer.step()
+                    
+                    # Step the learning rate scheduler
+                    if self.scheduler is not None:
+                        self.scheduler.step()
+                        
+                    # Log aggregated metrics for the optimization step
+                    avg_loss = sum(minibatch_losses) / len(minibatch_losses)
+                    avg_pg_loss = sum(minibatch_pg_losses) / len(minibatch_pg_losses)
+                    avg_kl = sum(minibatch_kls) / len(minibatch_kls)
+                    avg_reward_mean = sum(step_rewards_mean) / len(step_rewards_mean)
+                    avg_reward_max = sum(step_rewards_max) / len(step_rewards_max)
+                    avg_success_rate = sum(step_success_rates) / len(step_success_rates)
+                    
+                    current_lr = self.optimizer.param_groups[0]['lr']
+
+                    if use_wandb:
+                        wandb.log({
+                            "train/loss": avg_loss,
+                            "train/pg_loss": avg_pg_loss,
+                            "train/kl_divergence": avg_kl,
+                            "train/learning_rate": current_lr,
+                            "train/batch_reward_mean": avg_reward_mean,
+                            "train/batch_reward_max": avg_reward_max,
+                            "train/batch_success_rate": avg_success_rate,
+                            "step": total_optim_steps,
+                            "collection_step": step,
+                            "epoch_per_batch": epoch + 1,
+                        })
+                    
+                    print(
+                        f"Optim Step {total_optim_steps:05d} | Collection Step {step}/{steps}, Epoch {epoch+1}/{epochs_per_batch} | "
+                        f"loss: {avg_loss:.4f} | "
+                        f"kl: {avg_kl:.4f} | "
+                        f"lr: {current_lr:.2e} | "
+                        f"reward: {avg_reward_mean:.3f} | "
+                        f"success: {avg_success_rate:.1%}"
                     )
-                    loss = metrics['loss']
-                    
-                    # Normalize loss for accumulation across the buffer
-                    loss = loss / len(experience_buffer)
-                    
-                    # Accumulate gradients
-                    loss.backward()
-
-                    # Store metrics for logging
-                    epoch_losses.append(loss.item() * len(experience_buffer))
-                    epoch_pg_losses.append(metrics['pg_loss'])
-                    epoch_kls.append(metrics['kl_loss'])
+                        
+                    # Early stopping if KL divergence gets too high
+                    if avg_kl > kl_threshold:
+                        print(f"  Early stopping epoch due to high KL divergence: {avg_kl:.4f}")
+                        break
                 
-                # Clip gradients and perform optimizer step after accumulating over the whole buffer
-                total_optim_steps += 1
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
-                self.optimizer.step()
-                
-                # Step the learning rate scheduler
-                if self.scheduler is not None:
-                    self.scheduler.step()
-                    
-                # Log aggregated metrics for the optimization step
-                avg_loss = sum(epoch_losses) / len(epoch_losses)
-                avg_pg_loss = sum(epoch_pg_losses) / len(epoch_pg_losses)
-                avg_kl = sum(epoch_kls) / len(epoch_kls)
-                avg_reward_mean = sum(step_rewards_mean) / len(step_rewards_mean)
-                avg_reward_max = sum(step_rewards_max) / len(step_rewards_max)
-                avg_success_rate = sum(step_success_rates) / len(step_success_rates)
-                
-                current_lr = self.optimizer.param_groups[0]['lr']
-
-                if use_wandb:
-                    wandb.log({
-                        "train/loss": avg_loss,
-                        "train/pg_loss": avg_pg_loss,
-                        "train/kl_divergence": avg_kl,
-                        "train/learning_rate": current_lr,
-                        "train/batch_reward_mean": avg_reward_mean,
-                        "train/batch_reward_max": avg_reward_max,
-                        "train/batch_success_rate": avg_success_rate,
-                        "step": total_optim_steps,
-                        "collection_step": step,
-                        "epoch_per_batch": epoch + 1,
-                    })
-                
-                print(
-                    f"Optim Step {total_optim_steps:05d} | Collection Step {step}/{steps}, Epoch {epoch+1}/{epochs_per_batch} | "
-                    f"loss: {avg_loss:.4f} | "
-                    f"kl: {avg_kl:.4f} | "
-                    f"lr: {current_lr:.2e} | "
-                    f"reward: {avg_reward_mean:.3f} | "
-                    f"success: {avg_success_rate:.1%}"
-                )
-                    
-                # Early stopping if KL divergence gets too high
+                # Break outer loop if KL is high
                 if avg_kl > kl_threshold:
-                    print(f"  Early stopping epoch due to high KL divergence: {avg_kl:.4f}")
                     break
             
             # Break outer loop if KL is high
-            if avg_kl > kl_threshold:
+            if 'avg_kl' in locals() and avg_kl > kl_threshold:
                 print(f"  Early stopping collection step due to high KL divergence.")
                 break
 
@@ -755,6 +768,7 @@ def main():
     parser.add_argument("--max_new_tokens", type=int, default=1200, help="Maximum new tokens to generate")
     parser.add_argument("--batch_size", type=int, default=1, help="Number of prompts to sample from for each optimization step.")
     parser.add_argument("--epochs_per_batch", type=int, default=4, help="Number of optimization epochs to run on each collected batch of experience")
+    parser.add_argument("--minibatch_size", type=int, default=1, help="Size of minibatches for optimization.")
     
     # LoRA configuration
     parser.add_argument("--use_lora", action="store_true", default=True, help="Use LoRA for parameter-efficient fine-tuning")
@@ -891,6 +905,7 @@ def main():
         use_wandb=args.use_wandb,
         kl_threshold=args.kl_threshold,
         use_revision=args.use_revision,
+        minibatch_size=args.minibatch_size,
     )
 
     print("Training complete!")
