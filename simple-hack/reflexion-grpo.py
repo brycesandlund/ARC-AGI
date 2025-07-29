@@ -248,7 +248,7 @@ class GRPOTrainer:
         tokenizer: Any,
         steps: int,
         batch_size: int,
-        optim_epochs: int,
+        epochs_per_batch: int,
         rollouts_per_prompt: int,
         max_new_tokens: int,
         eval_dataset: Optional[Any] = None,
@@ -263,7 +263,7 @@ class GRPOTrainer:
         tokenizer : tokenizer for the model
         steps : total number of optimization steps
         batch_size : Number of prompts to use for experience generation in each collection step.
-        optim_epochs : number of optimization epochs to run on each collected batch of experience
+        epochs_per_batch : number of optimization epochs to run on each collected batch of experience
         rollouts_per_prompt : number of rollouts to generate for each prompt
         max_new_tokens : maximum new tokens to generate
         eval_dataset : optional dataset for evaluation
@@ -336,7 +336,7 @@ class GRPOTrainer:
                 print(f"  Collected micro-batch {micro_step+1}/{batch_size} | reward: {batch_reward_mean:.3f}")
             
             # --- 2. Optimization Phase ---
-            for epoch in range(optim_epochs):
+            for epoch in range(epochs_per_batch):
                 self.optimizer.zero_grad()
                 
                 epoch_losses = []
@@ -397,11 +397,11 @@ class GRPOTrainer:
                         "train/batch_success_rate": avg_success_rate,
                         "step": total_optim_steps,
                         "collection_step": step,
-                        "optim_epoch": epoch + 1,
+                        "epoch_per_batch": epoch + 1,
                     })
                 
                 print(
-                    f"Optim Step {total_optim_steps:05d} | Collection Step {step}/{steps}, Epoch {epoch+1}/{optim_epochs} | "
+                    f"Optim Step {total_optim_steps:05d} | Collection Step {step}/{steps}, Epoch {epoch+1}/{epochs_per_batch} | "
                     f"loss: {avg_loss:.4f} | "
                     f"kl: {avg_kl:.4f} | "
                     f"lr: {current_lr:.2e} | "
@@ -512,7 +512,7 @@ def generate_and_decode(model, tokenizer, prompts, max_new_tokens, disable_adapt
 
 
 def _create_batch_from_prompts(prompts, completions, tokenizer, rollouts_per_prompt, pad):
-    """Create a batch for the trainer from prompts and completions."""
+    """Create a micro-batch for the trainer from prompts and completions."""
     rewards = torch.tensor(math_reward_func(completions, prompts), dtype=torch.float32)
     pad_token_id = tokenizer.pad_token_id or tokenizer.eos_token_id
     
@@ -536,13 +536,13 @@ def _create_batch_from_prompts(prompts, completions, tokenizer, rollouts_per_pro
         actions.append(completion_toks)
 
     if pad:
-        input_ids, actions = pad_sequences_for_batch(full_sequences, actions, rollouts_per_prompt, pad_token_id)
+        input_ids, actions = pad_sequences(full_sequences, actions, rollouts_per_prompt, pad_token_id)
     else:
         input_ids = full_sequences
         
     return input_ids, actions, rewards, prompt_length, pad_token_id
 
-def pad_sequences_for_batch(full_sequences, generated_tokens, rollouts_per_prompt, pad_token_id):
+def pad_sequences(full_sequences, generated_tokens, rollouts_per_prompt, pad_token_id):
     """Pad sequences to same length for batch processing.
     
     Parameters
@@ -754,7 +754,7 @@ def main():
     parser.add_argument("--kl_coef", type=float, default=0.01, help="KL penalty coefficient")
     parser.add_argument("--max_new_tokens", type=int, default=1200, help="Maximum new tokens to generate")
     parser.add_argument("--batch_size", type=int, default=1, help="Number of prompts to sample from for each optimization step.")
-    parser.add_argument("--optim_epochs", type=int, default=4, help="Number of optimization epochs to run on each collected batch of experience")
+    parser.add_argument("--epochs_per_batch", type=int, default=4, help="Number of optimization epochs to run on each collected batch of experience")
     
     # LoRA configuration
     parser.add_argument("--use_lora", action="store_true", default=True, help="Use LoRA for parameter-efficient fine-tuning")
@@ -842,9 +842,9 @@ def main():
     total_optim_steps = args.steps
     
     # Calculate the number of data collection cycles.
-    collection_steps = math.ceil(total_optim_steps / args.optim_epochs)
+    collection_steps = math.ceil(total_optim_steps / args.epochs_per_batch)
     print(f"Total optimization steps: {total_optim_steps}")
-    print(f"Data collection steps: {collection_steps} (total_optim_steps / optim_epochs)")
+    print(f"Data collection steps: {collection_steps} (total_optim_steps / epochs_per_batch)")
 
     trainer = GRPOTrainer(
         model,
@@ -884,7 +884,7 @@ def main():
         tokenizer=tokenizer,
         steps=collection_steps,
         batch_size=args.batch_size,
-        optim_epochs=args.optim_epochs,
+        epochs_per_batch=args.epochs_per_batch,
         rollouts_per_prompt=args.rollouts_per_prompt,
         max_new_tokens=args.max_new_tokens,
         eval_dataset=eval_dataset,
