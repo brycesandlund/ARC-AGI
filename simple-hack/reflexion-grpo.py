@@ -353,6 +353,7 @@ class GRPOTrainer:
                 print(f"  Collected micro-batch {micro_step+1}/{batch_size} | reward: {batch_reward_mean:.3f}")
             
             # --- 2. Optimization Phase ---
+            kl_exceeded = False
             for epoch in range(epochs_per_batch):
                 random.shuffle(experience_buffer)  # Shuffle experience for each epoch
                 
@@ -392,6 +393,15 @@ class GRPOTrainer:
                         minibatch_kls.append(metrics['kl_loss'])
                         minibatch_clipped_fractions.append(metrics['clipped_fraction'])
                     
+                    # Aggregate KL divergence from the minibatch
+                    avg_kl = sum(minibatch_kls) / len(minibatch_kls) if minibatch_kls else 0.0
+
+                    # Check KL threshold before optimizer step
+                    if avg_kl > kl_threshold:
+                        print(f"  KL divergence {avg_kl:.4f} exceeds threshold {kl_threshold}. Abandoning optimization for this batch.")
+                        kl_exceeded = True
+                        break
+
                     # Clip gradients and perform optimizer step after accumulating over the whole minibatch
                     total_optim_steps += 1
                     torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
@@ -407,7 +417,6 @@ class GRPOTrainer:
                     # Log aggregated metrics for the optimization step
                     avg_loss = sum(minibatch_losses) / len(minibatch_losses)
                     avg_pg_loss = sum(minibatch_pg_losses) / len(minibatch_pg_losses)
-                    avg_kl = sum(minibatch_kls) / len(minibatch_kls)
                     avg_clipped_fraction = sum(minibatch_clipped_fractions) / len(minibatch_clipped_fractions)
                     
                     # Compute reward metrics from the current minibatch
@@ -443,20 +452,9 @@ class GRPOTrainer:
                         f"reward: {avg_reward_mean:.3f} | "
                         f"success: {avg_success_rate:.1%}"
                     )
-                        
-                    # Early stopping if KL divergence gets too high
-                    if avg_kl > kl_threshold:
-                        print(f"  Early stopping epoch due to high KL divergence: {avg_kl:.4f}")
-                        break
                 
-                # Break outer loop if KL is high
-                if avg_kl > kl_threshold:
+                if kl_exceeded:
                     break
-            
-            # Break outer loop if KL is high
-            if 'avg_kl' in locals() and avg_kl > kl_threshold:
-                print(f"  Early stopping collection step due to high KL divergence.")
-                break
 
         # Final evaluation if eval dataset provided
         if eval_dataset is not None:
@@ -815,7 +813,7 @@ def main():
     parser.add_argument("--dr", action="store_true", default=True, help="Disable reward normalization (skip length normalization and std division)")
     
     # KL threshold configuration
-    parser.add_argument("--kl_threshold", type=float, default=0.02, help="KL divergence threshold for early stopping")
+    parser.add_argument("--kl_threshold", type=float, default=10, help="KL divergence threshold for early stopping")
     
     # Revision configuration
     parser.add_argument("--use_revision", action="store_true", default=False, help="Use revision model to revise completions during sampling.")
