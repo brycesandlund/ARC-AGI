@@ -117,6 +117,12 @@ class GRPOTrainer:
         
         return kl_losses[mask].mean()
 
+    def _disable_dropout(self):
+        """Sets all dropout layers to eval mode."""
+        for m in self.model.modules():
+            if isinstance(m, torch.nn.Dropout):
+                m.eval()
+
     def compute_loss(
         self,
         input_ids: torch.Tensor,
@@ -139,8 +145,14 @@ class GRPOTrainer:
         old_logp   : (B, G) old log probabilities for generated tokens only
         """
         # Ensure deterministic computation (disable dropout) for both old and new log-probs
+        # The model must be in `train` mode for gradient checkpointing to work.
+        # Calling `model.eval()` disables it, causing OOMs.
         was_training = self.model.training
-        self.model.eval()
+        # self.model.eval() # <-- This was causing the memory issue
+
+        # Selectively disable dropout layers while keeping the model in training mode
+        if was_training:
+            self._disable_dropout()
 
         input_ids = input_ids.to(self.device)
         actions = actions.to(self.device)
@@ -329,12 +341,16 @@ class GRPOTrainer:
                 
                 # Pre-compute old_logp with dropout disabled for deterministic ratios
                 was_training = self.model.training
-                self.model.eval()
+                # self.model.eval() # <-- This also causes OOM with gradient checkpointing
+                if was_training:
+                    self._disable_dropout()
+                
                 with torch.no_grad():
                     outputs = self.model(input_ids.to(self.device))
                     logits = outputs.logits[:, prompt_length-1:-1, :]
                     target_actions = actions.to(self.device)
                     old_logp = self._old_log_probs(logits, target_actions)
+                
                 if was_training:
                     self.model.train()
                 
