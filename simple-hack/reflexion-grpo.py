@@ -138,6 +138,10 @@ class GRPOTrainer:
         pad_token_id : int, token ID used for padding
         old_logp   : (B, G) old log probabilities for generated tokens only
         """
+        # Ensure deterministic computation (disable dropout) for both old and new log-probs
+        was_training = self.model.training
+        self.model.eval()
+
         input_ids = input_ids.to(self.device)
         actions = actions.to(self.device)
         rewards = rewards.to(self.device)
@@ -199,6 +203,10 @@ class GRPOTrainer:
         pg_loss, clipped_fraction = self._pg_loss(new_logp, old_logp, advantages, mask)
         kl_loss = self._kl_loss(new_logp, ref_logp, mask)
         loss = pg_loss + self.kl_coef * kl_loss
+
+        # Restore original training/eval state of the model
+        if was_training:
+            self.model.train()
 
         return {
             "loss": loss,  # Return the loss tensor for backward pass
@@ -319,12 +327,16 @@ class GRPOTrainer:
                 
                 input_ids, actions, rewards, prompt_length, pad_token_id, _, _ = batch
                 
-                # Pre-compute old_logp based on the policy at the time of collection
+                # Pre-compute old_logp with dropout disabled for deterministic ratios
+                was_training = self.model.training
+                self.model.eval()
                 with torch.no_grad():
                     outputs = self.model(input_ids.to(self.device))
                     logits = outputs.logits[:, prompt_length-1:-1, :]
                     target_actions = actions.to(self.device)
                     old_logp = self._old_log_probs(logits, target_actions)
+                if was_training:
+                    self.model.train()
                 
                 experience_buffer.append({
                     'input_ids': input_ids, 'actions': actions, 'rewards': rewards,
