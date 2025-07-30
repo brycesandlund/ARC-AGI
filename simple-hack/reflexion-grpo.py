@@ -300,7 +300,7 @@ class GRPOTrainer:
         self.model.train()
         
         # Main training loop (steps are now data collection cycles)
-        for step in range(1, collection_steps + 1):
+        for collection_step in range(1, collection_steps + 1):
             
             # --- 1. Data Collection Phase ---
             experience_buffer = []
@@ -308,7 +308,7 @@ class GRPOTrainer:
             step_rewards_max = []
             step_success_rates = []
 
-            print(f"\nCollecting experience for collection step {step}/{collection_steps}...")
+            print(f"\nCollecting experience for collection step {collection_step}/{collection_steps}...")
             for micro_step in range(batch_size):
                 # Sample a fresh batch for each accumulation step
                 if use_revision:
@@ -436,7 +436,7 @@ class GRPOTrainer:
                             "train/batch_reward_max": avg_reward_max,
                             "train/batch_success_rate": avg_success_rate,
                             "step": total_optim_steps,
-                            "collection_step": step,
+                            "collection_step": collection_step,
                             "epoch_per_batch": epoch + 1,
                         })
                     
@@ -444,7 +444,7 @@ class GRPOTrainer:
                     total_minibatches = math.ceil(len(experience_buffer) / minibatch_size)
                     
                     print(
-                        f"Optim Step {total_optim_steps:05d} | Collection Step {step}/{collection_steps}, Epoch {epoch+1}/{epochs_per_batch}, MiniBatch {minibatch_num}/{total_minibatches} | "
+                        f"Optim Step {total_optim_steps:05d} | Collection Step {collection_step}/{collection_steps}, Epoch {epoch+1}/{epochs_per_batch}, MiniBatch {minibatch_num}/{total_minibatches} | "
                         f"loss: {avg_loss:.4f} | "
                         f"kl: {avg_kl:.4f} | "
                         f"clipped: {avg_clipped_fraction:.3f} | "
