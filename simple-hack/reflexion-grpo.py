@@ -211,6 +211,13 @@ class GRPOTrainer:
         # token, and >1 for subsequent pad tokens. We keep everything <= 1.
         mask = torch.cumsum(is_pad.to(torch.int), dim=1) <= 1
 
+        # Calculate model entropy over non-padded tokens for logging
+        with torch.no_grad():
+            probs = F.softmax(logits, dim=-1)
+            log_probs = F.log_softmax(logits, dim=-1)
+            token_entropy = -torch.sum(probs * log_probs, dim=-1)
+            mean_entropy = token_entropy[mask].mean().item()
+
         # Compute loss components
         pg_loss, clipped_fraction = self._pg_loss(new_logp, old_logp, advantages, mask)
         kl_loss = self._kl_loss(new_logp, ref_logp, mask)
@@ -229,6 +236,7 @@ class GRPOTrainer:
             "kl_loss": kl_loss.item(),
             "clipped_fraction": clipped_fraction,
             "avg_response_length": avg_response_length,
+            "model_entropy": mean_entropy,
         }
 
     def _run_evaluation(
@@ -389,6 +397,7 @@ class GRPOTrainer:
                     minibatch_kls = []
                     minibatch_clipped_fractions = []
                     minibatch_response_lengths = []
+                    minibatch_entropies = []
 
                     # Iterate over the collected experience in the minibatch
                     for micro_batch_data in minibatch:
@@ -415,6 +424,7 @@ class GRPOTrainer:
                         minibatch_kls.append(metrics['kl_loss'])
                         minibatch_clipped_fractions.append(metrics['clipped_fraction'])
                         minibatch_response_lengths.append(metrics['avg_response_length'])
+                        minibatch_entropies.append(metrics['model_entropy'])
                     
                     # Aggregate KL divergence from the minibatch
                     avg_kl = sum(minibatch_kls) / len(minibatch_kls) if minibatch_kls else 0.0
@@ -442,6 +452,7 @@ class GRPOTrainer:
                     avg_pg_loss = sum(minibatch_pg_losses) / len(minibatch_pg_losses)
                     avg_clipped_fraction = sum(minibatch_clipped_fractions) / len(minibatch_clipped_fractions)
                     avg_response_length = sum(minibatch_response_lengths) / len(minibatch_response_lengths)
+                    avg_entropy = sum(minibatch_entropies) / len(minibatch_entropies)
                     
                     # Compute reward metrics from the current minibatch
                     minibatch_rewards = torch.cat([data['rewards'] for data in minibatch])
@@ -460,6 +471,7 @@ class GRPOTrainer:
                             "train/batch_reward_mean": avg_reward_mean,
                             "train/batch_reward_max": avg_reward_max,
                             "train/batch_success_rate": avg_success_rate,
+                            "train/model_entropy": avg_entropy,
                             "step": total_optim_steps,
                             "collection_step": collection_step,
                             "epoch_per_batch": epoch + 1,
@@ -476,7 +488,8 @@ class GRPOTrainer:
                         f"len: {avg_response_length:.1f} | "
                         f"lr: {current_lr:.2e} | "
                         f"reward: {avg_reward_mean:.3f} | "
-                        f"success: {avg_success_rate:.1%}"
+                        f"success: {avg_success_rate:.1%} | "
+                        f"entropy: {avg_entropy:.4f}"
                     )
                 
                 if kl_exceeded:
