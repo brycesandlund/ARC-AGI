@@ -213,9 +213,10 @@ class GRPOTrainer:
 
         # Calculate model entropy over non-padded tokens for logging
         with torch.no_grad():
-            probs = F.softmax(logits, dim=-1)
-            log_probs = F.log_softmax(logits, dim=-1)
-            token_entropy = -torch.sum(probs * log_probs, dim=-1)
+            # Using torch.distributions.Categorical is more memory-efficient
+            # than manually calculating softmax and log_softmax.
+            dist = torch.distributions.Categorical(logits=logits)
+            token_entropy = dist.entropy()
             mean_entropy = token_entropy[mask].mean().item()
 
         # Compute loss components
