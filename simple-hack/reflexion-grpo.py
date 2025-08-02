@@ -281,6 +281,7 @@ class GRPOTrainer:
             wandb.log({
                 f"{eval_type}_eval/success_rate": metrics.get("eval_success_rate", 0),
                 f"{eval_type}_eval/reward_mean": metrics.get("eval_reward_mean", 0),
+                f"{eval_type}_eval/reward_std": metrics.get("eval_reward_std", 0),
                 f"{eval_type}_eval/avg_response_length": metrics.get("eval_avg_response_length", 0),
                 "episode": episode
             })
@@ -467,6 +468,7 @@ class GRPOTrainer:
                     minibatch_rewards = torch.cat([data['rewards'] for data in minibatch])
                     avg_reward_mean = minibatch_rewards.mean().item()
                     avg_reward_max = minibatch_rewards.max().item()
+                    avg_reward_std = minibatch_rewards.std().item()
                     avg_success_rate = (minibatch_rewards > 0).float().mean().item()
                     
                     if use_wandb:
@@ -479,6 +481,7 @@ class GRPOTrainer:
                             "train/learning_rate": current_lr,
                             "train/batch_reward_mean": avg_reward_mean,
                             "train/batch_reward_max": avg_reward_max,
+                            "train/batch_reward_std": avg_reward_std,
                             "train/batch_success_rate": avg_success_rate,
                             "train/model_entropy": avg_entropy,
                             "step": total_optim_steps,
@@ -497,6 +500,7 @@ class GRPOTrainer:
                         f"len: {avg_response_length:.1f} | "
                         f"lr: {current_lr:.2e} | "
                         f"reward: {avg_reward_mean:.3f} | "
+                        f"reward_std: {avg_reward_std:.3f} | "
                         f"success: {avg_success_rate:.1%} | "
                         f"entropy: {avg_entropy:.4f}"
                     )
@@ -770,6 +774,7 @@ def evaluate_model(model, tokenizer, eval_dataset, max_new_tokens=512, batch_siz
     total_samples = 0
     success_count = 0
     total_response_length = 0.0
+    all_rewards = []
     
     # Convert dataset to list if it's not already
     eval_samples = list(eval_dataset)
@@ -805,6 +810,7 @@ def evaluate_model(model, tokenizer, eval_dataset, max_new_tokens=512, batch_siz
         
         # Calculate rewards for the batch
         batch_rewards = math_reward_func(completions, batch_prompts)
+        all_rewards.extend(batch_rewards)
         
         # Accumulate statistics
         total_response_length += response_lengths.sum().item()
@@ -816,11 +822,13 @@ def evaluate_model(model, tokenizer, eval_dataset, max_new_tokens=512, batch_siz
     
     # Calculate metrics
     avg_reward = total_reward / total_samples if total_samples > 0 else 0.0
+    reward_std = torch.tensor(all_rewards, dtype=torch.float32).std().item() if total_samples > 0 else 0.0
     success_rate = success_count / total_samples if total_samples > 0 else 0.0
     avg_response_length = total_response_length / total_samples if total_samples > 0 else 0.0
     
     return {
         "eval_reward_mean": avg_reward,
+        "eval_reward_std": reward_std,
         "eval_success_rate": success_rate,
         "eval_avg_response_length": avg_response_length,
         "eval_samples": total_samples
