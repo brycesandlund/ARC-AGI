@@ -38,6 +38,7 @@ class GRPOTrainer:
         total_steps: Optional[int] = None,
         lr_schedule: bool = True,
         min_lr_ratio: float = 0.1,
+        grad_clip_norm: Optional[float] = 1.0,
     ) -> None:
         self.model = model.to(device)
         self.ref_model = ref_model.to(device)
@@ -47,6 +48,7 @@ class GRPOTrainer:
         self.kl_coef = kl_coef
         self.device = device
         self.dr = dr
+        self.grad_clip_norm = grad_clip_norm
         
         # Learning rate scheduler setup
         self.lr_schedule = lr_schedule
@@ -63,6 +65,12 @@ class GRPOTrainer:
             print(f"Initial optimizer LR: {self.optimizer.param_groups[0]['lr']:.2e}")
         else:
             print(f"No LR scheduling - static LR: {self.optimizer.param_groups[0]['lr']:.2e}")
+        
+        # Print gradient clipping configuration
+        if self.grad_clip_norm is not None:
+            print(f"Gradient clipping enabled with norm: {self.grad_clip_norm}")
+        else:
+            print("Gradient clipping disabled")
 
     def _old_log_probs(self, logits: torch.Tensor, actions: torch.Tensor) -> torch.Tensor:
         """Return log-probabilities of `actions` under the policy that produced `logits`."""
@@ -437,7 +445,8 @@ class GRPOTrainer:
 
                     # Clip gradients and perform optimizer step after accumulating over the whole minibatch
                     total_optim_steps += 1
-                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+                    if self.grad_clip_norm is not None:
+                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip_norm)
                     self.optimizer.step()
                     
                     # Capture LR before scheduler step for accurate logging
@@ -868,6 +877,9 @@ def main():
     # Learning rate scheduler configuration
     parser.add_argument("--lr_schedule", action="store_true", default=True, help="Use linear learning rate decay")
     parser.add_argument("--min_lr_ratio", type=float, default=0.1, help="Minimum learning rate as ratio of initial LR (default: 0.1 = 10% of initial LR)")
+    
+    # Gradient clipping configuration
+    parser.add_argument("--grad_clip_norm", type=float, default=1.0, help="Gradient clipping norm. Set to 0 or negative to disable clipping")
 
     args = parser.parse_args()
 
@@ -944,6 +956,7 @@ def main():
         total_steps=total_optim_steps,
         lr_schedule=args.lr_schedule,
         min_lr_ratio=args.min_lr_ratio,
+        grad_clip_norm=args.grad_clip_norm if args.grad_clip_norm > 0 else None,
     )
 
     print("Starting GRPO fine-tuning with math problems …")
