@@ -200,8 +200,9 @@ class GRPOTrainer:
         if self.dr:
             # Skip length normalization and std normalization when dr=True
             advantages = rewards.unsqueeze(-1).expand_as(old_logp)
-            advantages = advantages - advantages.mean()  # Only center, don't normalize std
+            # Not precisely DR GRPO anymore, but might make this a little easier to train and not a big difference.
             advantages = advantages / 1000 # scale down advantages according to approximate sequence length
+            advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
         else:
             # Apply full normalization (length + std) when dr=False
             seq_lengths = (target_actions != pad_token_id).sum(dim=1).float().clamp(min=1.0)  # Use actual pad token
