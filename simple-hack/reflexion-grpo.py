@@ -560,6 +560,15 @@ def generate_with_cache(model, **kwargs):
     return generated_ids
 
 
+def _extract_completions(tokenizer, generated_ids: torch.Tensor, prompts: List[str]) -> List[str]:
+    """Decodes generated token sequences and extracts the completions by stripping the prompt text."""
+    full_texts = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)
+    completions = [
+        full_text[len(prompt):] for full_text, prompt in zip(full_texts, prompts)
+    ]
+    return completions
+
+
 def generate_and_decode(model, tokenizer, prompts, max_new_tokens, disable_adapter=False, enable_thinking: bool = True, **gen_kwargs):
     """Generates completions from a model and decodes them."""
     
@@ -600,9 +609,7 @@ def generate_and_decode(model, tokenizer, prompts, max_new_tokens, disable_adapt
         generated_ids = generate_with_cache(model, **base_gen_kwargs)
         
     # Extract, decode, and return completions
-    prompt_length = tokenized["input_ids"].shape[1]
-    generated_tokens = generated_ids[:, prompt_length:]
-    completions = [tokenizer.decode(gen, skip_special_tokens=True) for gen in generated_tokens]
+    completions = _extract_completions(tokenizer, generated_ids, processed_prompts)
     
     return completions
 
@@ -806,10 +813,11 @@ def evaluate_model(model, tokenizer, eval_dataset, max_new_tokens=512, batch_siz
             repetition_penalty=1.1
         )
         
-        # Extract only the generated parts and decode completions
-        prompt_length = inputs["input_ids"].shape[1]
-        generated_tokens = generated[:, prompt_length:]
-        completions = [tokenizer.decode(gen, skip_special_tokens=True) for gen in generated_tokens]
+        # Decode each generated sequence and extract the completion.
+        completions = _extract_completions(tokenizer, generated, batch_prompts)
+        
+        # Re-tokenize completions to get token counts for length calculation
+        generated_tokens = tokenizer(completions, padding=True, return_tensors="pt")["input_ids"]
         
         # Calculate response lengths for the batch
         pad_token_id = tokenizer.pad_token_id or tokenizer.eos_token_id
