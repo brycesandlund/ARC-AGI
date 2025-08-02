@@ -70,6 +70,7 @@ class GRPOTrainer:
         if self.grad_clip_norm is not None:
             print(f"Gradient clipping enabled with norm: {self.grad_clip_norm}")
         else:
+            self.grad_clip_norm = float('inf')
             print("Gradient clipping disabled")
 
     def _old_log_probs(self, logits: torch.Tensor, actions: torch.Tensor) -> torch.Tensor:
@@ -446,8 +447,11 @@ class GRPOTrainer:
 
                     # Clip gradients and perform optimizer step after accumulating over the whole minibatch
                     total_optim_steps += 1
-                    if self.grad_clip_norm is not None:
-                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip_norm)
+                    
+                    # Gradient Norm Calculation and Clipping. clip_grad_norm_ returns the total norm of
+                    # all parameters (viewed as a single vector) before clipping.
+                    grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip_norm).item()
+
                     self.optimizer.step()
                     
                     # Capture LR before scheduler step for accurate logging
@@ -484,6 +488,7 @@ class GRPOTrainer:
                             "train/batch_reward_std": avg_reward_std,
                             "train/batch_success_rate": avg_success_rate,
                             "train/model_entropy": avg_entropy,
+                            "train/grad_norm": grad_norm,
                             "step": total_optim_steps,
                             "collection_step": collection_step,
                             "epoch_per_batch": epoch + 1,
@@ -501,6 +506,7 @@ class GRPOTrainer:
                         f"lr: {current_lr:.2e} | "
                         f"reward: {avg_reward_mean:.3f} | "
                         f"reward_std: {avg_reward_std:.3f} | "
+                        f"grad_norm: {grad_norm:.4f} | "
                         f"success: {avg_success_rate:.1%} | "
                         f"entropy: {avg_entropy:.4f}"
                     )
