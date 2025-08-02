@@ -167,8 +167,13 @@ class GRPOTrainer:
         actions = actions.to(self.device)
         rewards = rewards.to(self.device)
 
+        # Construct an attention mask (1 for real tokens, 0 for PAD) so the model
+        # does not attend to padding on the left.  This fixes the unintended
+        # influence of pad tokens during both policy and reference forward passes.
+        attention_mask = (input_ids != pad_token_id).long()
+
         # Forward pass
-        outputs = self.model(input_ids)
+        outputs = self.model(input_ids, attention_mask=attention_mask)
         
         # Extract logits only for positions predicting generated tokens
         # We want logits[prompt_length-1:] to predict actions (generated tokens)
@@ -182,10 +187,10 @@ class GRPOTrainer:
             if hasattr(self.model, "disable_adapter"):
                 # LoRA or other PEFT model – disable adapters for a clean reference policy
                 with self.model.disable_adapter():  # type: ignore[attr-defined]
-                    ref_outputs = self.model(input_ids)
+                    ref_outputs = self.model(input_ids, attention_mask=attention_mask)
             else:
                 # Full-fine-tune setting – use the dedicated frozen reference model
-                ref_outputs = self.ref_model(input_ids)
+                ref_outputs = self.ref_model(input_ids, attention_mask=attention_mask)
 
             ref_logits = ref_outputs.logits[:, prompt_length-1:-1, :]
             ref_logp = self._old_log_probs(ref_logits, target_actions)
@@ -370,7 +375,8 @@ class GRPOTrainer:
                     self._disable_dropout()
                 
                 with torch.no_grad():
-                    outputs = self.model(input_ids.to(self.device))
+                    attn = (input_ids != pad_token_id).long().to(self.device)
+                    outputs = self.model(input_ids.to(self.device), attention_mask=attn)
                     logits = outputs.logits[:, prompt_length-1:-1, :]
                     target_actions = actions.to(self.device)
                     old_logp = self._old_log_probs(logits, target_actions)
