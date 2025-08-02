@@ -566,12 +566,13 @@ def generate_with_cache(model, **kwargs):
     return generated_ids
 
 
-def _extract_completions(tokenizer, generated_ids: torch.Tensor, prompts: List[str]) -> List[str]:
-    """Decodes generated token sequences and extracts the completions by stripping the prompt text."""
-    full_texts = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)
-    completions = [
-        full_text[len(prompt):] for full_text, prompt in zip(full_texts, prompts)
-    ]
+def _extract_completions(tokenizer, generated_ids: torch.Tensor, input_ids: torch.Tensor) -> List[str]:
+    """Decodes generated token sequences and extracts the completions by slicing the token tensors."""
+    # Slice the generated_ids tensor to get only the tokens that were generated after the prompt.
+    completion_ids = generated_ids[:, input_ids.shape[1]:]
+    
+    # Decode the completion tokens, skipping special tokens.
+    completions = tokenizer.batch_decode(completion_ids, skip_special_tokens=True)
     return completions
 
 
@@ -614,8 +615,8 @@ def generate_and_decode(model, tokenizer, prompts, max_new_tokens, disable_adapt
     else:
         generated_ids = generate_with_cache(model, **base_gen_kwargs)
         
-    # Extract, decode, and return completions
-    completions = _extract_completions(tokenizer, generated_ids, processed_prompts)
+    # Extract, decode, and return completions using the new token-based slicing method.
+    completions = _extract_completions(tokenizer, generated_ids, tokenized["input_ids"])
     
     return completions
 
@@ -820,7 +821,7 @@ def evaluate_model(model, tokenizer, eval_dataset, max_new_tokens=512, batch_siz
         )
         
         # Decode each generated sequence and extract the completion.
-        completions = _extract_completions(tokenizer, generated, batch_prompts)
+        completions = _extract_completions(tokenizer, generated, inputs["input_ids"])
         
         # Re-tokenize completions to get token counts for length calculation
         generated_tokens = tokenizer(completions, padding=True, return_tensors="pt")["input_ids"]
