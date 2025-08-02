@@ -40,7 +40,8 @@ def train():
     dataset_size_used = min(len(full_dataset), dataset_size)
 
     # Split into train/eval with fixed eval size of 30
-    eval_size = 30
+    # eval_size = 30
+    eval_size = 1
     train_size = dataset_size_used - eval_size
     train_dataset = full_dataset.select(range(train_size))
     eval_dataset = full_dataset.select(range(train_size, dataset_size_used))
@@ -77,15 +78,15 @@ def train():
         max_grad_norm=1.0,
         learning_rate=5e-5,  # Slightly lower learning rate for more stable training
         lr_scheduler_type="cosine",
-        per_device_train_batch_size=8,  # Increased batch size for A100. Reduce if you encounter OOM errors.
-        num_generations=8,
-        gradient_accumulation_steps=1,  # Effective batch size of 8
-        num_train_epochs=1,
-        max_completion_length=1500,
+        per_device_train_batch_size=3,  # Increased batch size for A100. Reduce if you encounter OOM errors.
+        num_generations=4,
+        gradient_accumulation_steps=4,  # Effective batch size of 12
+        num_train_epochs=3,
+        max_completion_length=1200,
         temperature=0.7,
         logging_steps=1,
         report_to="wandb",
-        gradient_checkpointing=True,        # Ran out of memory on an A100 without this.
+        gradient_checkpointing=False,        # Ran out of memory on an A100 without this.
         warmup_steps=5,  # ~10% of total steps
         bf16=True,
     )
