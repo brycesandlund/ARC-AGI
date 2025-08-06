@@ -153,16 +153,6 @@ class GRPOTrainer:
         pad_token_id : int, token ID used for padding
         old_logp   : (B, G) old log probabilities for generated tokens only
         """
-        # Ensure deterministic computation (disable dropout) for both old and new log-probs
-        # The model must be in `train` mode for gradient checkpointing to work.
-        # Calling `model.eval()` disables it, causing OOMs.
-        was_training = self.model.training
-        # self.model.eval() # <-- This was causing the memory issue
-
-        # Selectively disable dropout layers while keeping the model in training mode
-        if was_training:
-            self._disable_dropout()
-
         input_ids = input_ids.to(self.device)
         actions = actions.to(self.device)
         rewards = rewards.to(self.device)
@@ -237,10 +227,6 @@ class GRPOTrainer:
         pg_loss, clipped_fraction = self._pg_loss(new_logp, old_logp, advantages, mask)
         kl_loss = self._kl_loss(new_logp, ref_logp, mask)
         loss = pg_loss + self.kl_coef * kl_loss
-
-        # Restore original training/eval state of the model
-        if was_training:
-            self.model.train()
 
         response_lengths = (target_actions != pad_token_id).sum(dim=1).float()
         avg_response_length = response_lengths.mean().item()
@@ -339,6 +325,7 @@ class GRPOTrainer:
         print("Starting GRPO training...")
         # Set the model back to train mode for training
         self.model.train()
+        self._disable_dropout()
         
         # Main training loop (steps are now data collection cycles)
         for collection_step in range(1, collection_steps + 1):
@@ -368,21 +355,12 @@ class GRPOTrainer:
                 
                 input_ids, actions, rewards, prompt_length, pad_token_id, _, _ = batch
                 
-                # Pre-compute old_logp with dropout disabled for deterministic ratios
-                was_training = self.model.training
-                # self.model.eval() # <-- This also causes OOM with gradient checkpointing
-                if was_training:
-                    self._disable_dropout()
-                
                 with torch.no_grad():
                     attn = (input_ids != pad_token_id).long().to(self.device)
                     outputs = self.model(input_ids.to(self.device), attention_mask=attn)
                     logits = outputs.logits[:, prompt_length-1:-1, :]
                     target_actions = actions.to(self.device)
                     old_logp = self._old_log_probs(logits, target_actions)
-                
-                if was_training:
-                    self.model.train()
                 
                 experience_buffer.append({
                     'input_ids': input_ids, 'actions': actions, 'rewards': rewards,
