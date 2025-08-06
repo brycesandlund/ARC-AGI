@@ -923,6 +923,9 @@ def main():
 
     # Load model & tokenizer (trust_remote_code required for Qwen series)
     tokenizer = AutoTokenizer.from_pretrained(args.model_name, trust_remote_code=True)
+
+    # Pad token for Qwen3-1.7B is <|endoftext|>
+    # EOS token is <|im_end|>
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     
