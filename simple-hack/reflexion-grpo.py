@@ -196,7 +196,7 @@ class GRPOTrainer:
             # Skip length normalization and std normalization when dr=True
             advantages = rewards.unsqueeze(-1).expand_as(old_logp)
             # Not precisely DR GRPO anymore, but might make this a little easier to train and not a big difference.
-            advantages = advantages / 1000 # scale down advantages according to approximate sequence length
+            advantages = advantages / 1000 # Scale down advantages according to approximate sequence length. Note this doesn't really matter after normalization.
             advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
         else:
             # Apply full normalization (length + std) when dr=False
