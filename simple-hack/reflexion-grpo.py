@@ -211,7 +211,13 @@ class GRPOTrainer:
         # The mask should include all real tokens and the first pad/EOS token,
         # but exclude all subsequent padding tokens.
         is_pad = (target_actions == pad_token_id)
+        is_eos = (target_actions == 151645)
 
+        # torch.set_printoptions(threshold=10_000)
+        # print("is_pad:", is_pad)
+        # print("is_eos:", is_eos)
+
+        
         # The cumulative sum will be 0 for real tokens, 1 for the first pad
         # token, and >1 for subsequent pad tokens. We keep everything <= 1.
         mask = torch.cumsum(is_pad.to(torch.int), dim=1) <= 1
@@ -581,7 +587,6 @@ def generate_and_decode(model, tokenizer, prompts, max_new_tokens, disable_adapt
         "temperature": 0.7,
         "do_sample": True,
         "pad_token_id": tokenizer.pad_token_id or tokenizer.eos_token_id,
-        "repetition_penalty": 1.1,
     }
     # Update with any additional kwargs
     base_gen_kwargs.update(gen_kwargs)
@@ -592,6 +597,22 @@ def generate_and_decode(model, tokenizer, prompts, max_new_tokens, disable_adapt
             generated_ids = generate_with_cache(model, **base_gen_kwargs)
     else:
         generated_ids = generate_with_cache(model, **base_gen_kwargs)
+
+    # Debug: Check for padding and EOS tokens in generated sequences
+    pad_token_id = tokenizer.pad_token_id or tokenizer.eos_token_id
+    eos_token_id = tokenizer.eos_token_id
+    
+    is_pad_tensor = (generated_ids == pad_token_id)
+    is_eos_tensor = (generated_ids == eos_token_id)
+    
+    torch.set_printoptions(threshold=10_000, linewidth=200)
+    print("Generated IDs shape:", generated_ids.shape)
+    print("Pad token ID:", pad_token_id)
+    print("EOS token ID:", eos_token_id)
+    print("is_pad_tensor (generated_ids == pad_token_id):")
+    print(is_pad_tensor)
+    print("is_eos_tensor (generated_ids == eos_token_id):")
+    print(is_eos_tensor)
         
     # Extract, decode, and return completions using token-based slicing.
     completions = _extract_completions(tokenizer, generated_ids, tokenized["input_ids"])
@@ -899,11 +920,15 @@ def main():
     # Load model & tokenizer (trust_remote_code required for Qwen series)
     tokenizer = AutoTokenizer.from_pretrained(args.model_name, trust_remote_code=True)
 
-    # Pad token for Qwen3-1.7B is <|endoftext|>
-    # EOS token is <|im_end|> = 151645` `
+    # Pad token for Qwen3-1.7B is <|endoftext|> = 151643
+    # EOS token is <|im_end|> = 151645
+    # Therefore this conditional does not execute on Qwen3-1.7B (presumably all Qwen3 models).
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     
+    print(f"Tokenizer pad token: '{tokenizer.pad_token}' (ID: {tokenizer.pad_token_id})")
+    print(f"Tokenizer EOS token: '{tokenizer.eos_token}' (ID: {tokenizer.eos_token_id})")
+
     # Set padding side to 'left' for decoder-only models
     tokenizer.padding_side = 'left'
     
