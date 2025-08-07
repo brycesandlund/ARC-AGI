@@ -250,7 +250,7 @@ class GRPOTrainer:
         self,
         eval_dataset: Any,
         tokenizer: Any,
-        max_new_tokens: int,
+        trajectory_length: int,
         eval_type: str,
         episode: int,
         use_wandb: bool = False,
@@ -261,7 +261,7 @@ class GRPOTrainer:
         ----------
         eval_dataset : evaluation dataset
         tokenizer : tokenizer for the model
-        max_new_tokens : maximum new tokens to generate
+        trajectory_length : fixed trajectory length (total tokens including prompt)
         eval_type : "initial" or "final" for logging purposes
         episode : current episode number for wandb logging
         use_wandb : whether to log to wandb
@@ -273,7 +273,7 @@ class GRPOTrainer:
         self.model.eval()
 
         print(f"\nRunning {eval_type} evaluation...")
-        metrics = evaluate_model(self.model, tokenizer, eval_dataset, max_new_tokens)
+        metrics = evaluate_model(self.model, tokenizer, eval_dataset, trajectory_length)
         print(f"{eval_type.capitalize()} metrics: {metrics}")
 
         if use_wandb:
@@ -294,7 +294,7 @@ class GRPOTrainer:
         batch_size: int,
         epochs_per_batch: int,
         rollouts_per_prompt: int,
-        max_new_tokens: int,
+        trajectory_length: int,
         eval_dataset: Optional[Any] = None,
         use_wandb: bool = False,
         kl_threshold: float = 0.02,
@@ -310,7 +310,7 @@ class GRPOTrainer:
         batch_size : Number of prompts to use for experience generation in each collection step.
         epochs_per_batch : number of optimization epochs to run on each collected batch of experience
         rollouts_per_prompt : number of rollouts to generate for each prompt
-        max_new_tokens : maximum new tokens to generate
+        trajectory_length : fixed trajectory length (total tokens including prompt)
         eval_dataset : optional dataset for evaluation
         use_wandb : whether to log to wandb
         kl_threshold : KL divergence threshold for early stopping
@@ -326,7 +326,7 @@ class GRPOTrainer:
         
         # Initial evaluation if eval dataset provided
         if eval_dataset is not None:
-            initial_metrics = self._run_evaluation(eval_dataset, tokenizer, max_new_tokens, "initial", 0, use_wandb)
+            initial_metrics = self._run_evaluation(eval_dataset, tokenizer, trajectory_length, "initial", 0, use_wandb)
 
         print("Starting GRPO training...")
         # Set the model back to train mode for training
@@ -351,13 +351,13 @@ class GRPOTrainer:
                         tokenizer=tokenizer,
                         revision_model=self.model,
                         rollouts_per_prompt=rollouts_per_prompt,
-                        max_new_tokens=max_new_tokens,
+                        trajectory_length=trajectory_length,
                         pad=True,
                         disable_adapter=False,
                         enable_thinking=False
                     )
                 else:
-                    batch = sample(self.model, tokenizer, rollouts_per_prompt=rollouts_per_prompt, max_new_tokens=max_new_tokens)
+                    batch = sample(self.model, tokenizer, rollouts_per_prompt=rollouts_per_prompt, trajectory_length=trajectory_length)
                 
                 input_ids, actions, rewards, prompt_length, pad_token_id, _, _ = batch
                 
@@ -507,7 +507,7 @@ class GRPOTrainer:
 
         # Final evaluation if eval dataset provided
         if eval_dataset is not None:
-            final_metrics = self._run_evaluation(eval_dataset, tokenizer, max_new_tokens, "final", total_optim_steps, use_wandb)
+            final_metrics = self._run_evaluation(eval_dataset, tokenizer, trajectory_length, "final", total_optim_steps, use_wandb)
                 
             # Log training summary
             if use_wandb and wandb.run is not None:
@@ -560,7 +560,7 @@ def _extract_completions(tokenizer, generated_ids: torch.Tensor, input_ids: torc
     return completions
 
 
-def generate_and_decode(model, tokenizer, prompts, max_new_tokens, disable_adapter=False, enable_thinking: bool = True, **gen_kwargs):
+def generate_and_decode(model, tokenizer, prompts, trajectory_length, disable_adapter=False, enable_thinking: bool = True, **gen_kwargs):
     """Generates completions from a model and decodes them."""
     
     # Convert prompts to chat message format
@@ -579,11 +579,12 @@ def generate_and_decode(model, tokenizer, prompts, max_new_tokens, disable_adapt
 
     tokenized = tokenizer(processed_prompts, return_tensors="pt", padding=True, truncation=True)
     
-    # Base generation arguments
+    # Base generation arguments - using fixed trajectory length
     base_gen_kwargs = {
         "input_ids": tokenized["input_ids"].to(model.device),
         "attention_mask": tokenized["attention_mask"].to(model.device),
-        "max_new_tokens": max_new_tokens,
+        "min_length": trajectory_length,
+        "max_length": trajectory_length,
         "temperature": 0.7,
         "do_sample": True,
         "pad_token_id": tokenizer.pad_token_id or tokenizer.eos_token_id,
@@ -698,11 +699,11 @@ def pad_sequences(
 
 
 def sample_and_revise(
-    model, 
-    tokenizer, 
+    model,
+    tokenizer,
     revision_model,
     rollouts_per_prompt: int, 
-    max_new_tokens: int, 
+    trajectory_length: int, 
     pad: bool, 
     disable_adapter: bool, 
     enable_thinking: bool
@@ -715,7 +716,7 @@ def sample_and_revise(
     """
     # 1. First pass: Sample from the base model to get initial solutions
     _, _, _, _, _, prompts, initial_completions = sample(
-        model, tokenizer, rollouts_per_prompt, max_new_tokens, pad=True
+        model, tokenizer, rollouts_per_prompt, trajectory_length, pad=True
     )
 
     # 2. Second pass: Construct revision prompts and revise with the revision_model
@@ -741,7 +742,7 @@ The revised completion should be in the format: <think>chain-of-thought</think> 
         revision_model,
         tokenizer,
         revision_prompts,
-        max_new_tokens,
+        trajectory_length,
         disable_adapter=disable_adapter,
         enable_thinking=enable_thinking,
     )
@@ -761,7 +762,7 @@ The revised completion should be in the format: <think>chain-of-thought</think> 
     return input_ids, actions, rewards, prompt_length, pad_token_id, prompts, final_completions
 
 
-def sample(model, tokenizer, rollouts_per_prompt: int = 4, max_new_tokens: int = 512, pad: bool = True):
+def sample(model, tokenizer, rollouts_per_prompt: int = 4, trajectory_length: int = 512, pad: bool = True):
     """Generate a batch of math problems and model completions for GRPO training."""
     
     # Generate one math problem and use it for all batch elements
@@ -773,7 +774,7 @@ def sample(model, tokenizer, rollouts_per_prompt: int = 4, max_new_tokens: int =
     prompts = [problem["prompt"] for problem in problems]
 
     # Generate completions using the model
-    completions = generate_and_decode(model, tokenizer, prompts, max_new_tokens, enable_thinking=True)
+    completions = generate_and_decode(model, tokenizer, prompts, trajectory_length, enable_thinking=True)
     
     # Create the batch from prompts and generated completions
     input_ids, actions, rewards, prompt_length, pad_token_id = _create_batch(
@@ -783,7 +784,7 @@ def sample(model, tokenizer, rollouts_per_prompt: int = 4, max_new_tokens: int =
     return input_ids, actions, rewards, prompt_length, pad_token_id, prompts, completions
 
 
-def evaluate_model(model, tokenizer, eval_dataset, max_new_tokens=512, batch_size=12):
+def evaluate_model(model, tokenizer, eval_dataset, trajectory_length=512, batch_size=12):
     """Batched evaluation function that generates completions and calculates rewards."""
     
     model.eval()
@@ -809,7 +810,8 @@ def evaluate_model(model, tokenizer, eval_dataset, max_new_tokens=512, batch_siz
             model,
             input_ids=inputs["input_ids"].to(model.device),
             attention_mask=inputs["attention_mask"].to(model.device),
-            max_new_tokens=max_new_tokens,
+            min_length=trajectory_length,
+            max_length=trajectory_length,
             temperature=0.7,
             do_sample=True,
             pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id,
@@ -871,7 +873,7 @@ def main():
     parser.add_argument("--rollouts_per_prompt", type=int, default=8, help="Number of rollouts per prompt.")
     parser.add_argument("--clip_ratio", type=float, default=0.2, help="PPO-style clip ratio")
     parser.add_argument("--kl_coef", type=float, default=0.01, help="KL penalty coefficient")
-    parser.add_argument("--max_new_tokens", type=int, default=1200, help="Maximum new tokens to generate")
+    parser.add_argument("--trajectory_length", type=int, default=1200, help="Fixed trajectory length (total tokens including prompt)")
     parser.add_argument("--batch_size", type=int, default=1, help="Number of prompts to sample from for each optimization step.")
     parser.add_argument("--epochs_per_batch", type=int, default=4, help="Number of optimization epochs to run on each collected batch of experience")
     parser.add_argument("--minibatch_size", type=int, default=1, help="Size of minibatches for optimization.")
@@ -1020,7 +1022,7 @@ def main():
         batch_size=args.batch_size,
         epochs_per_batch=args.epochs_per_batch,
         rollouts_per_prompt=args.rollouts_per_prompt,
-        max_new_tokens=args.max_new_tokens,
+        trajectory_length=args.trajectory_length,
         eval_dataset=eval_dataset,
         use_wandb=args.use_wandb,
         kl_threshold=args.kl_threshold,
