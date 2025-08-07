@@ -158,8 +158,7 @@ class GRPOTrainer:
         rewards = rewards.to(self.device)
 
         # Construct an attention mask (1 for real tokens, 0 for PAD) so the model
-        # does not attend to padding on the left.  This fixes the unintended
-        # influence of pad tokens during both policy and reference forward passes.
+        # does not attend to padding.
         attention_mask = (input_ids != pad_token_id).long()
 
         # Forward pass
@@ -191,9 +190,9 @@ class GRPOTrainer:
         else:
             old_logp = old_logp.to(self.device)
 
-        # Compute advantages with optional sequence length normalization and standardization
+        # Compute advantages with optional sequence length normalization
         if self.dr:
-            # Skip length normalization and std normalization when dr=True
+            # Skip length normalization when dr=True
             advantages = rewards.unsqueeze(-1).expand_as(old_logp)
             # Not precisely DR GRPO anymore, but might make this a little easier to train and not a big difference.
             advantages = advantages / 1000 # Scale down advantages according to approximate sequence length. Note this doesn't really matter after normalization.
@@ -212,6 +211,7 @@ class GRPOTrainer:
         # The mask should include all real tokens and the first pad/EOS token,
         # but exclude all subsequent padding tokens.
         is_pad = (target_actions == pad_token_id)
+
         # The cumulative sum will be 0 for real tokens, 1 for the first pad
         # token, and >1 for subsequent pad tokens. We keep everything <= 1.
         mask = torch.cumsum(is_pad.to(torch.int), dim=1) <= 1
@@ -900,7 +900,7 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(args.model_name, trust_remote_code=True)
 
     # Pad token for Qwen3-1.7B is <|endoftext|>
-    # EOS token is <|im_end|>
+    # EOS token is <|im_end|> = 151645` `
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     
