@@ -624,13 +624,36 @@ def _create_batch_from_prompts(prompts, completions, tokenizer, rollouts_per_pro
         actions.append(completion_toks)
 
     if pad:
-        input_ids, actions = pad_sequences(full_sequences, actions, rollouts_per_prompt, pad_token_id)
+        input_ids, actions = pad_sequences(full_sequences, actions, pad_token_id)
     else:
         input_ids = full_sequences
         
     return input_ids, actions, rewards, prompt_length, pad_token_id
 
-def pad_sequences(full_sequences, generated_tokens, rollouts_per_prompt, pad_token_id):
+def _pad_and_stack_sequences(sequences: List[torch.Tensor], pad_token_id: int) -> torch.Tensor:
+    """Pad a list of sequences to their maximum length and stack them."""
+    max_len = max(seq.shape[0] for seq in sequences) if sequences else 0
+    
+    if not sequences:
+        return torch.empty((0, max_len), dtype=torch.long)
+
+    padded_sequences = []
+    for seq in sequences:
+        if seq.shape[0] < max_len:
+            padding = torch.full((max_len - seq.shape[0],), pad_token_id, dtype=torch.long)
+            padded_seq = torch.cat([seq, padding])
+        else:
+            padded_seq = seq[:max_len]
+        padded_sequences.append(padded_seq)
+        
+    return torch.stack(padded_sequences)
+
+
+def pad_sequences(
+    full_sequences: List[torch.Tensor], 
+    generated_tokens: List[torch.Tensor], 
+    pad_token_id: int
+) -> Tuple[torch.Tensor, torch.Tensor]:
     """Pad sequences to same length for batch processing.
     
     Parameters
@@ -639,8 +662,6 @@ def pad_sequences(full_sequences, generated_tokens, rollouts_per_prompt, pad_tok
         Full sequences (prompt + generated tokens)
     generated_tokens : list of torch.Tensor
         Generated tokens only
-    rollouts_per_prompt : int
-        Number of rollouts for the batch.
     pad_token_id : int
         Token ID to use for padding
         
@@ -649,35 +670,11 @@ def pad_sequences(full_sequences, generated_tokens, rollouts_per_prompt, pad_tok
     tuple[torch.Tensor, torch.Tensor]
         Padded input_ids and actions tensors
     """
-    max_full_len = max(seq.shape[0] for seq in full_sequences)
-    max_action_len = max(seq.shape[0] for seq in generated_tokens)
-    padded_input_ids = []
-    padded_actions = []
-    
-    for i in range(rollouts_per_prompt):
-        # Pad full sequences (for input_ids)
-        full_seq_len = full_sequences[i].shape[0]
-        if full_seq_len < max_full_len:
-            padding = torch.full((max_full_len - full_seq_len,), pad_token_id, dtype=torch.long)
-            padded_full_seq = torch.cat([full_sequences[i], padding])
-        else:
-            padded_full_seq = full_sequences[i][:max_full_len]
-        
-        # Pad generated tokens (for actions)
-        action_seq_len = generated_tokens[i].shape[0]
-        if action_seq_len < max_action_len:
-            padding = torch.full((max_action_len - action_seq_len,), pad_token_id, dtype=torch.long)
-            padded_action_seq = torch.cat([generated_tokens[i], padding])
-        else:
-            padded_action_seq = generated_tokens[i][:max_action_len]
-        
-        padded_input_ids.append(padded_full_seq)
-        padded_actions.append(padded_action_seq)
-    
-    input_ids = torch.stack(padded_input_ids)
-    actions = torch.stack(padded_actions)
+    input_ids = _pad_and_stack_sequences(full_sequences, pad_token_id)
+    actions = _pad_and_stack_sequences(generated_tokens, pad_token_id)
     
     return input_ids, actions
+
 
 def sample_and_revise(
     model, 
