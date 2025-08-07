@@ -593,13 +593,13 @@ def generate_and_decode(model, tokenizer, prompts, max_new_tokens, disable_adapt
     else:
         generated_ids = generate_with_cache(model, **base_gen_kwargs)
         
-    # Extract, decode, and return completions using the new token-based slicing method.
+    # Extract, decode, and return completions using token-based slicing.
     completions = _extract_completions(tokenizer, generated_ids, tokenized["input_ids"])
     
     return completions
 
 
-def _create_batch_from_prompts(prompts, completions, tokenizer, rollouts_per_prompt, pad):
+def _create_batch(prompts, completions, tokenizer, rollouts_per_prompt, pad):
     """Create a micro-batch for the trainer from prompts and completions."""
     rewards = torch.tensor(math_reward_func(completions, prompts), dtype=torch.float32)
     pad_token_id = tokenizer.pad_token_id or tokenizer.eos_token_id
@@ -733,7 +733,7 @@ The revised completion should be in the format: <think>chain-of-thought</think> 
         final_completions = revised_completions
     
     # Create the batch from prompts and generated completions
-    input_ids, actions, rewards, prompt_length, pad_token_id = _create_batch_from_prompts(
+    input_ids, actions, rewards, prompt_length, pad_token_id = _create_batch(
         prompts, final_completions, tokenizer, rollouts_per_prompt, pad
     )
     
@@ -755,7 +755,7 @@ def sample(model, tokenizer, rollouts_per_prompt: int = 4, max_new_tokens: int =
     completions = generate_and_decode(model, tokenizer, prompts, max_new_tokens, enable_thinking=True)
     
     # Create the batch from prompts and generated completions
-    input_ids, actions, rewards, prompt_length, pad_token_id = _create_batch_from_prompts(
+    input_ids, actions, rewards, prompt_length, pad_token_id = _create_batch(
         prompts, completions, tokenizer, rollouts_per_prompt, pad
     )
     
