@@ -617,6 +617,7 @@ def generate_and_decode(model, tokenizer, prompts, max_new_tokens, disable_adapt
     # Extract, decode, and return completions using token-based slicing.
     completions = _extract_completions(tokenizer, generated_ids, tokenized["input_ids"])
     
+    # Return text completions, full generated sequence, and tokenized prompts
     return completions, generated_ids, tokenized["input_ids"]
 
 
