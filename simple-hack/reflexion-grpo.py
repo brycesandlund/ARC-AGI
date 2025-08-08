@@ -584,9 +584,10 @@ def generate_and_decode(model, tokenizer, prompts, max_new_tokens, disable_adapt
         "input_ids": tokenized["input_ids"].to(model.device),
         "attention_mask": tokenized["attention_mask"].to(model.device),
         "max_new_tokens": max_new_tokens,
-        "temperature": 0.7,
+        # "temperature": 0.7,
         "do_sample": True,
         "pad_token_id": tokenizer.pad_token_id or tokenizer.eos_token_id,
+        # "repetition_penalty": 1.1,
     }
     # Update with any additional kwargs
     base_gen_kwargs.update(gen_kwargs)
@@ -613,88 +614,12 @@ def generate_and_decode(model, tokenizer, prompts, max_new_tokens, disable_adapt
     print(is_pad_tensor)
     print("is_eos_tensor (generated_ids == eos_token_id):")
     print(is_eos_tensor)
+    print(tokenizer.batch_decode(generated_ids))
         
     # Extract, decode, and return completions using token-based slicing.
     completions = _extract_completions(tokenizer, generated_ids, tokenized["input_ids"])
     
-    return completions
-
-
-def _create_batch(prompts, completions, tokenizer, rollouts_per_prompt, pad):
-    """Create a micro-batch for the trainer from prompts and completions."""
-    rewards = torch.tensor(math_reward_func(completions, prompts), dtype=torch.float32)
-    pad_token_id = tokenizer.pad_token_id or tokenizer.eos_token_id
-    
-    # Get a consistent prompt length by padding
-    tokenized_prompts = tokenizer(prompts, padding=True, return_tensors="pt")
-    prompt_length = tokenized_prompts['input_ids'].shape[1]
-
-    # Tokenize completions and create full sequences
-    full_sequences = []
-    actions = []
-    
-    tokenized_prompts_list = tokenizer(prompts, padding=False, truncation=True)['input_ids']
-    tokenized_completions_list = tokenizer(completions, padding=False, truncation=True)['input_ids']
-
-    for i in range(rollouts_per_prompt):
-        prompt_toks = torch.tensor(tokenized_prompts_list[i], dtype=torch.long)
-        completion_toks = torch.tensor(tokenized_completions_list[i], dtype=torch.long)
-        
-        full_seq = torch.cat([prompt_toks, completion_toks])
-        full_sequences.append(full_seq)
-        actions.append(completion_toks)
-
-    if pad:
-        input_ids, actions = pad_sequences(full_sequences, actions, pad_token_id)
-    else:
-        input_ids = full_sequences
-        
-    return input_ids, actions, rewards, prompt_length, pad_token_id
-
-def _pad_and_stack_sequences(sequences: List[torch.Tensor], pad_token_id: int) -> torch.Tensor:
-    """Pad a list of sequences to their maximum length and stack them."""
-    max_len = max(seq.shape[0] for seq in sequences) if sequences else 0
-    
-    if not sequences:
-        return torch.empty((0, max_len), dtype=torch.long)
-
-    padded_sequences = []
-    for seq in sequences:
-        if seq.shape[0] < max_len:
-            padding = torch.full((max_len - seq.shape[0],), pad_token_id, dtype=torch.long)
-            padded_seq = torch.cat([seq, padding])
-        else:
-            padded_seq = seq[:max_len]
-        padded_sequences.append(padded_seq)
-        
-    return torch.stack(padded_sequences)
-
-
-def pad_sequences(
-    full_sequences: List[torch.Tensor], 
-    generated_tokens: List[torch.Tensor], 
-    pad_token_id: int
-) -> Tuple[torch.Tensor, torch.Tensor]:
-    """Pad sequences to same length for batch processing.
-    
-    Parameters
-    ----------
-    full_sequences : list of torch.Tensor
-        Full sequences (prompt + generated tokens)
-    generated_tokens : list of torch.Tensor
-        Generated tokens only
-    pad_token_id : int
-        Token ID to use for padding
-        
-    Returns
-    -------
-    tuple[torch.Tensor, torch.Tensor]
-        Padded input_ids and actions tensors
-    """
-    input_ids = _pad_and_stack_sequences(full_sequences, pad_token_id)
-    actions = _pad_and_stack_sequences(generated_tokens, pad_token_id)
-    
-    return input_ids, actions
+    return completions, generated_ids, tokenized["input_ids"]
 
 
 def sample_and_revise(
@@ -737,7 +662,7 @@ The revised completion should be in the format: <think>chain-of-thought</think> 
         revision_prompts.append(revision_prompt)
     
     # Generate revised completions
-    revised_completions = generate_and_decode(
+    revised_completions, revised_generated_ids, revised_tokenized_input_ids = generate_and_decode(
         revision_model,
         tokenizer,
         revision_prompts,
@@ -754,9 +679,11 @@ The revised completion should be in the format: <think>chain-of-thought</think> 
         final_completions = revised_completions
     
     # Create the batch from prompts and generated completions
-    input_ids, actions, rewards, prompt_length, pad_token_id = _create_batch(
-        prompts, final_completions, tokenizer, rollouts_per_prompt, pad
-    )
+    rewards = torch.tensor(math_reward_func(final_completions, prompts), dtype=torch.float32)
+    pad_token_id = tokenizer.pad_token_id or tokenizer.eos_token_id
+    prompt_length = revised_tokenized_input_ids.shape[1]
+    input_ids = revised_generated_ids
+    actions = revised_generated_ids[:, prompt_length:]
     
     return input_ids, actions, rewards, prompt_length, pad_token_id, prompts, final_completions
 
@@ -773,13 +700,15 @@ def sample(model, tokenizer, rollouts_per_prompt: int = 4, max_new_tokens: int =
     prompts = [problem["prompt"] for problem in problems]
 
     # Generate completions using the model
-    completions = generate_and_decode(model, tokenizer, prompts, max_new_tokens, enable_thinking=True)
+    completions, generated_ids, tokenized_input_ids = generate_and_decode(model, tokenizer, prompts, max_new_tokens, enable_thinking=True)
     
     # Create the batch from prompts and generated completions
-    input_ids, actions, rewards, prompt_length, pad_token_id = _create_batch(
-        prompts, completions, tokenizer, rollouts_per_prompt, pad
-    )
-    
+    rewards = torch.tensor(math_reward_func(completions, prompts), dtype=torch.float32)
+    pad_token_id = tokenizer.pad_token_id or tokenizer.eos_token_id
+    prompt_length = tokenized_input_ids.shape[1]
+    input_ids = generated_ids
+    actions = generated_ids[:, prompt_length:]
+
     return input_ids, actions, rewards, prompt_length, pad_token_id, prompts, completions
 
 
