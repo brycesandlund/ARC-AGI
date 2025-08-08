@@ -16,6 +16,10 @@ from datasets import Dataset
 # Import math problem generation and reward functions
 from functions import generate_math_problems, math_reward_func, parse_completion
 
+# Global token IDs - initialized in main() after tokenizer is loaded
+PAD_TOKEN_ID = None
+EOS_TOKEN_ID = None
+
 # ============================================================
 #   Generalized Reinforced Policy Optimization (GRPO)
 #   Minimal PyTorch implementation written from scratch so it
@@ -138,7 +142,6 @@ class GRPOTrainer:
         actions: torch.Tensor,
         rewards: torch.Tensor,
         prompt_length: int,
-        pad_token_id: int,
         old_logp: Optional[torch.Tensor] = None,
     ) -> Dict[str, Any]:
         """Compute the loss for a batch, but do not perform an optimization step.
@@ -150,7 +153,6 @@ class GRPOTrainer:
         actions    : (B, G) generated tokens only
         rewards    : (B,) scalar reward for each sequence
         prompt_length : int, length of the prompt (same for all in batch)
-        pad_token_id : int, token ID used for padding
         old_logp   : (B, G) old log probabilities for generated tokens only
         """
         input_ids = input_ids.to(self.device)
@@ -159,7 +161,7 @@ class GRPOTrainer:
 
         # Construct an attention mask (1 for real tokens, 0 for PAD) so the model
         # does not attend to padding.
-        attention_mask = (input_ids != pad_token_id).long()
+        attention_mask = (input_ids != PAD_TOKEN_ID).long()
 
         # Forward pass
         outputs = self.model(input_ids, attention_mask=attention_mask)
@@ -199,7 +201,7 @@ class GRPOTrainer:
             advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
         else:
             # Apply full normalization (length + std) when dr=False
-            seq_lengths = (target_actions != pad_token_id).sum(dim=1).float().clamp(min=1.0)  # Use actual pad token
+            seq_lengths = (target_actions != PAD_TOKEN_ID).sum(dim=1).float().clamp(min=1.0)  # Use actual pad token
             normalized_rewards = rewards / seq_lengths
             advantages = normalized_rewards.unsqueeze(-1).expand_as(old_logp)
             advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
@@ -210,8 +212,8 @@ class GRPOTrainer:
         # Create mask to ignore padding tokens in loss calculations.
         # The mask should include all real tokens and the first pad/EOS token,
         # but exclude all subsequent padding tokens.
-        is_pad = (target_actions == pad_token_id)
-        is_eos = (target_actions == 151645)
+        is_pad = (target_actions == PAD_TOKEN_ID)
+        is_eos = (target_actions == EOS_TOKEN_ID)
 
         # torch.set_printoptions(threshold=10_000)
         # print("is_pad:", is_pad)
@@ -234,7 +236,7 @@ class GRPOTrainer:
         kl_loss = self._kl_loss(new_logp, ref_logp, mask)
         loss = pg_loss + self.kl_coef * kl_loss
 
-        response_lengths = (target_actions != pad_token_id).sum(dim=1).float()
+        response_lengths = (target_actions != PAD_TOKEN_ID).sum(dim=1).float()
         avg_response_length = response_lengths.mean().item()
 
         return {
@@ -359,10 +361,10 @@ class GRPOTrainer:
                 else:
                     batch = sample(self.model, tokenizer, rollouts_per_prompt=rollouts_per_prompt, max_new_tokens=max_new_tokens)
                 
-                input_ids, actions, rewards, prompt_length, pad_token_id, _, _ = batch
+                input_ids, actions, rewards, prompt_length, _, _ = batch
                 
                 with torch.no_grad():
-                    attn = (input_ids != pad_token_id).long().to(self.device)
+                    attn = (input_ids != PAD_TOKEN_ID).long().to(self.device)
                     outputs = self.model(input_ids.to(self.device), attention_mask=attn)
                     logits = outputs.logits[:, prompt_length-1:-1, :]
                     target_actions = actions.to(self.device)
@@ -370,7 +372,7 @@ class GRPOTrainer:
                 
                 experience_buffer.append({
                     'input_ids': input_ids, 'actions': actions, 'rewards': rewards,
-                    'prompt_length': prompt_length, 'pad_token_id': pad_token_id,
+                    'prompt_length': prompt_length,
                     'old_logp': old_logp
                 })
                 
@@ -408,7 +410,6 @@ class GRPOTrainer:
                             actions=micro_batch_data['actions'],
                             rewards=micro_batch_data['rewards'],
                             prompt_length=micro_batch_data['prompt_length'],
-                            pad_token_id=micro_batch_data['pad_token_id'],
                             old_logp=micro_batch_data['old_logp']
                         )
                         loss = metrics['loss']
@@ -586,7 +587,7 @@ def generate_and_decode(model, tokenizer, prompts, max_new_tokens, disable_adapt
         "max_new_tokens": max_new_tokens,
         # "temperature": 0.7,
         "do_sample": True,
-        "pad_token_id": tokenizer.pad_token_id or tokenizer.eos_token_id,
+        "pad_token_id": PAD_TOKEN_ID,
         # "repetition_penalty": 1.1,
     }
     # Update with any additional kwargs
@@ -600,19 +601,16 @@ def generate_and_decode(model, tokenizer, prompts, max_new_tokens, disable_adapt
         generated_ids = generate_with_cache(model, **base_gen_kwargs)
 
     # Debug: Check for padding and EOS tokens in generated sequences
-    pad_token_id = tokenizer.pad_token_id or tokenizer.eos_token_id
-    eos_token_id = tokenizer.eos_token_id
-    
-    is_pad_tensor = (generated_ids == pad_token_id)
-    is_eos_tensor = (generated_ids == eos_token_id)
+    is_pad_tensor = (generated_ids == PAD_TOKEN_ID)
+    is_eos_tensor = (generated_ids == EOS_TOKEN_ID)
     
     torch.set_printoptions(threshold=10_000, linewidth=200)
     print("Generated IDs shape:", generated_ids.shape)
-    print("Pad token ID:", pad_token_id)
-    print("EOS token ID:", eos_token_id)
-    print("is_pad_tensor (generated_ids == pad_token_id):")
+    print("Pad token ID:", PAD_TOKEN_ID)
+    print("EOS token ID:", EOS_TOKEN_ID)
+    print("is_pad_tensor (generated_ids == PAD_TOKEN_ID):")
     print(is_pad_tensor)
-    print("is_eos_tensor (generated_ids == eos_token_id):")
+    print("is_eos_tensor (generated_ids == EOS_TOKEN_ID):")
     print(is_eos_tensor)
     print(tokenizer.batch_decode(generated_ids))
         
@@ -639,7 +637,7 @@ def sample_and_revise(
     3. Return the revised completions and their rewards.
     """
     # 1. First pass: Sample from the base model to get initial solutions
-    _, _, _, _, _, prompts, initial_completions = sample(
+    _, _, _, _, prompts, initial_completions = sample(
         model, tokenizer, rollouts_per_prompt, max_new_tokens, pad=True
     )
 
@@ -680,12 +678,11 @@ The revised completion should be in the format: <think>chain-of-thought</think> 
     
     # Create the batch from prompts and generated completions
     rewards = torch.tensor(math_reward_func(final_completions, prompts), dtype=torch.float32)
-    pad_token_id = tokenizer.pad_token_id or tokenizer.eos_token_id
     prompt_length = revised_tokenized_input_ids.shape[1]
     input_ids = revised_generated_ids
     actions = revised_generated_ids[:, prompt_length:]
     
-    return input_ids, actions, rewards, prompt_length, pad_token_id, prompts, final_completions
+    return input_ids, actions, rewards, prompt_length, prompts, final_completions
 
 
 def sample(model, tokenizer, rollouts_per_prompt: int = 4, max_new_tokens: int = 512, pad: bool = True):
@@ -704,12 +701,11 @@ def sample(model, tokenizer, rollouts_per_prompt: int = 4, max_new_tokens: int =
     
     # Create the batch from prompts and generated completions
     rewards = torch.tensor(math_reward_func(completions, prompts), dtype=torch.float32)
-    pad_token_id = tokenizer.pad_token_id or tokenizer.eos_token_id
     prompt_length = tokenized_input_ids.shape[1]
     input_ids = generated_ids
     actions = generated_ids[:, prompt_length:]
 
-    return input_ids, actions, rewards, prompt_length, pad_token_id, prompts, completions
+    return input_ids, actions, rewards, prompt_length, prompts, completions
 
 
 def evaluate_model(model, tokenizer, eval_dataset, max_new_tokens=512, batch_size=12):
@@ -741,7 +737,7 @@ def evaluate_model(model, tokenizer, eval_dataset, max_new_tokens=512, batch_siz
             max_new_tokens=max_new_tokens,
             temperature=0.7,
             do_sample=True,
-            pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id,
+            pad_token_id=PAD_TOKEN_ID,
             repetition_penalty=1.1
         )
         
@@ -752,8 +748,7 @@ def evaluate_model(model, tokenizer, eval_dataset, max_new_tokens=512, batch_siz
         generated_tokens = tokenizer(completions, padding=True, return_tensors="pt")["input_ids"]
         
         # Calculate response lengths for the batch
-        pad_token_id = tokenizer.pad_token_id or tokenizer.eos_token_id
-        response_lengths = (generated_tokens != pad_token_id).sum(dim=1).float()
+        response_lengths = (generated_tokens != PAD_TOKEN_ID).sum(dim=1).float()
         
         # Calculate rewards for the batch
         batch_rewards = math_reward_func(completions, batch_prompts)
@@ -855,11 +850,13 @@ def main():
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     
+    global PAD_TOKEN_ID
+    PAD_TOKEN_ID = tokenizer.pad_token_id
+    global EOS_TOKEN_ID
+    EOS_TOKEN_ID = tokenizer.eos_token_id
+
     print(f"Tokenizer pad token: '{tokenizer.pad_token}' (ID: {tokenizer.pad_token_id})")
     print(f"Tokenizer EOS token: '{tokenizer.eos_token}' (ID: {tokenizer.eos_token_id})")
-
-    # Set padding side to 'left' for decoder-only models
-    tokenizer.padding_side = 'left'
     
     config = AutoConfig.from_pretrained(args.model_name, trust_remote_code=True)
     base_model = AutoModelForCausalLM.from_pretrained(
