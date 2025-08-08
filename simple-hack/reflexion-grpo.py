@@ -354,7 +354,6 @@ class GRPOTrainer:
                         revision_model=self.model,
                         rollouts_per_prompt=rollouts_per_prompt,
                         max_new_tokens=max_new_tokens,
-                        pad=True,
                         disable_adapter=False,
                         enable_thinking=False
                     )
@@ -627,7 +626,6 @@ def sample_and_revise(
     revision_model,
     rollouts_per_prompt: int, 
     max_new_tokens: int, 
-    pad: bool, 
     disable_adapter: bool, 
     enable_thinking: bool
 ):
@@ -639,7 +637,7 @@ def sample_and_revise(
     """
     # 1. First pass: Sample from the base model to get initial solutions
     _, _, _, _, prompts, initial_completions = sample(
-        model, tokenizer, rollouts_per_prompt, max_new_tokens, pad=True
+        model, tokenizer, rollouts_per_prompt, max_new_tokens
     )
 
     # 2. Second pass: Construct revision prompts and revise with the revision_model
@@ -686,7 +684,7 @@ The revised completion should be in the format: <think>chain-of-thought</think> 
     return input_ids, actions, rewards, prompt_length, prompts, final_completions
 
 
-def sample(model, tokenizer, rollouts_per_prompt: int = 4, max_new_tokens: int = 512, pad: bool = True):
+def sample(model, tokenizer, rollouts_per_prompt: int = 4, max_new_tokens: int = 512):
     """Generate a batch of math problems and model completions for GRPO training."""
     
     # Generate one math problem and use it for all batch elements
