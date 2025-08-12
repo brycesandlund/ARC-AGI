@@ -136,10 +136,10 @@ class GRPOTrainer:
         Parameters
         ----------
         input_ids : (B, T) full sequence tokens (prompt + generated)
-        rewards    : (B,) scalar reward for each sequence
         loss_mask  : (B, T-1) mask indicating which tokens are part of the sequence to compute loss for
         old_logp   : Old log probabilities. Either flattened to match masked positions or full (B, T-1) to be masked
         advantages_per_sequence : (B,) single scalar advantage per sequence
+        rollouts_per_prompt : number of rollouts to normalize loss by
         """
         input_ids = input_ids.to(self.device)
         loss_mask = loss_mask.to(self.device)
@@ -377,14 +377,11 @@ class GRPOTrainer:
                         )
                         loss = metrics['loss']
                         
-                        # Normalize loss for accumulation across the minibatch
-                        loss = loss / len(minibatch)
-                        
                         # Accumulate gradients
                         loss.backward()
 
                         # Store metrics for logging
-                        minibatch_losses.append(loss.item() * len(minibatch))
+                        minibatch_losses.append(loss.item())
                         minibatch_pg_losses.append(metrics['pg_loss'])
                         minibatch_kls.append(metrics['kl_loss'])
                         minibatch_clipped_fractions.append(metrics['clipped_fraction'])
