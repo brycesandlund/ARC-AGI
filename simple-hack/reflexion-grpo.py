@@ -19,6 +19,7 @@ from functions import generate_math_problems, math_reward_func, parse_completion
 # Global token IDs - initialized in main() after tokenizer is loaded
 PAD_TOKEN_ID = None
 EOS_TOKEN_ID = None
+SEQUENCE_LENGTH_NORMALIZATION = 1000.0
 
 # ============================================================
 #   Generalized Reinforced Policy Optimization (GRPO)
@@ -124,7 +125,6 @@ class GRPOTrainer:
     def compute_loss(
         self,
         input_ids: torch.Tensor,
-        rewards: torch.Tensor,
         loss_mask: torch.Tensor,
         old_logp: torch.Tensor,
         advantages_per_sequence: torch.Tensor,
@@ -191,7 +191,7 @@ class GRPOTrainer:
         # Compute loss components
         pg_loss, clipped_fraction = self._pg_loss(new_logp, old_logp, advantages)
         kl_loss = self._kl_loss(new_logp, ref_logp)
-        loss = pg_loss + self.kl_coef * kl_loss
+        loss = (pg_loss + self.kl_coef * kl_loss) / SEQUENCE_LENGTH_NORMALIZATION
 
         avg_response_length = loss_mask.sum().item() / loss_mask.shape[0]
 
@@ -729,71 +729,67 @@ def sample(model, tokenizer, rollouts_per_prompt: int = 4, max_new_tokens: int =
 
 
 def evaluate_model(model, tokenizer, eval_dataset, max_new_tokens=512, batch_size=12):
-    """Batched evaluation function that generates completions and calculates rewards."""
-    
+    """Batched evaluation that uses the same chat templating and generation path as training."""
+
     model.eval()
     total_reward = 0.0
     total_samples = 0
     success_count = 0
     total_response_length = 0.0
     all_rewards = []
-    
+
     # Convert dataset to list if it's not already
     eval_samples = list(eval_dataset)
-    
+
     # Process evaluation dataset in batches
     for i in range(0, len(eval_samples), batch_size):
-        batch_samples = eval_samples[i:i+batch_size]
+        batch_samples = eval_samples[i:i + batch_size]
         batch_prompts = [sample["query"] for sample in batch_samples]
-        
-        # Tokenize the batch of prompts
-        inputs = tokenizer(batch_prompts, return_tensors="pt", padding=True, truncation=True)
-        
-        # Generate completions for the batch
-        generated = generate_with_cache(
+
+        # Use the unified generation path (with chat template) for consistency
+        completions, generated_ids, tokenized_input_ids = generate_and_decode(
             model,
-            input_ids=inputs["input_ids"].to(model.device),
-            attention_mask=inputs["attention_mask"].to(model.device),
-            max_new_tokens=max_new_tokens,
-            temperature=0.7,
-            do_sample=True,
-            pad_token_id=PAD_TOKEN_ID,
-            repetition_penalty=1.1
+            tokenizer,
+            batch_prompts,
+            max_new_tokens,
+            enable_thinking=True,
         )
-        
-        # Decode each generated sequence and extract the completion.
-        completions = _extract_completions(tokenizer, generated, inputs["input_ids"])
-        
-        # Re-tokenize completions to get token counts for length calculation
-        generated_tokens = tokenizer(completions, padding=True, return_tensors="pt")["input_ids"]
-        
-        # Calculate response lengths for the batch
-        response_lengths = (generated_tokens != PAD_TOKEN_ID).sum(dim=1).float()
-        
+
+        # Compute response lengths directly from token ids
+        prompt_lengths = (tokenized_input_ids != PAD_TOKEN_ID).sum(dim=1)
+        batch_response_lengths = []
+        for row_idx in range(generated_ids.size(0)):
+            prompt_len = prompt_lengths[row_idx].item()
+            response_ids = generated_ids[row_idx, prompt_len:]
+            response_len = (response_ids != PAD_TOKEN_ID).sum().item()
+            batch_response_lengths.append(response_len)
+
         # Calculate rewards for the batch
         batch_rewards = math_reward_func(completions, batch_prompts)
         all_rewards.extend(batch_rewards)
-        
+
         # Accumulate statistics
-        total_response_length += response_lengths.sum().item()
+        total_response_length += float(sum(batch_response_lengths))
         for reward in batch_rewards:
             total_reward += reward
             total_samples += 1
             if reward > 0:
                 success_count += 1
-    
+
     # Calculate metrics
     avg_reward = total_reward / total_samples if total_samples > 0 else 0.0
-    reward_std = torch.tensor(all_rewards, dtype=torch.float32).std().item() if total_samples > 0 else 0.0
+    reward_std = (
+        torch.tensor(all_rewards, dtype=torch.float32).std().item() if total_samples > 0 else 0.0
+    )
     success_rate = success_count / total_samples if total_samples > 0 else 0.0
     avg_response_length = total_response_length / total_samples if total_samples > 0 else 0.0
-    
+
     return {
         "eval_reward_mean": avg_reward,
         "eval_reward_std": reward_std,
         "eval_success_rate": success_rate,
         "eval_avg_response_length": avg_response_length,
-        "eval_samples": total_samples
+        "eval_samples": total_samples,
     }
 
 
@@ -880,7 +876,6 @@ def main():
         args.model_name,
         config=config,
         torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
-        device_map="auto",
         trust_remote_code=True,
     )
 
