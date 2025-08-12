@@ -128,6 +128,7 @@ class GRPOTrainer:
         loss_mask: torch.Tensor,
         old_logp: torch.Tensor,
         advantages_per_sequence: torch.Tensor,
+        rollouts_per_prompt: int,
     ) -> Dict[str, Any]:
         """Compute the loss for a batch, but do not perform an optimization step.
         This is used for gradient accumulation.
@@ -141,7 +142,6 @@ class GRPOTrainer:
         advantages_per_sequence : (B,) single scalar advantage per sequence
         """
         input_ids = input_ids.to(self.device)
-        rewards = rewards.to(self.device)
         loss_mask = loss_mask.to(self.device)
 
         # Construct an attention mask (1 for real tokens, 0 for PAD)
@@ -169,6 +169,7 @@ class GRPOTrainer:
         # Ensure provided old_logp is on device and aligned to masked positions
         old_logp = old_logp.to(self.device)
         # If provided as full (B, T-1), apply mask to flatten; if already 1D, leave as is
+        # Note that current code _indeed_ supplies a full (B, T-1) tensor, so we need to mask it.
         if old_logp.dim() == 2:
             old_logp = old_logp[loss_mask]
 
@@ -191,7 +192,7 @@ class GRPOTrainer:
         # Compute loss components
         pg_loss, clipped_fraction = self._pg_loss(new_logp, old_logp, advantages)
         kl_loss = self._kl_loss(new_logp, ref_logp)
-        loss = (pg_loss + self.kl_coef * kl_loss) / SEQUENCE_LENGTH_NORMALIZATION
+        loss = (pg_loss + self.kl_coef * kl_loss) / SEQUENCE_LENGTH_NORMALIZATION / float(rollouts_per_prompt)
 
         avg_response_length = loss_mask.sum().item() / loss_mask.shape[0]
 
@@ -369,10 +370,10 @@ class GRPOTrainer:
                         # Compute loss for the micro-batch using the pre-computed old_logp
                         metrics = self.compute_loss(
                             input_ids=micro_batch_data['input_ids'],
-                            rewards=micro_batch_data['rewards'],
                             loss_mask=micro_batch_data['loss_mask'],
                             old_logp=micro_batch_data['old_logp'],
-                            advantages_per_sequence=micro_batch_data['advantages']
+                            advantages_per_sequence=micro_batch_data['advantages'],
+                            rollouts_per_prompt=rollouts_per_prompt,
                         )
                         loss = metrics['loss']
                         
