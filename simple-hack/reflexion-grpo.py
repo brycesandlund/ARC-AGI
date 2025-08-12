@@ -38,7 +38,6 @@ class GRPOTrainer:
         clip_ratio: float = 0.2,
         kl_coef: float = 0.01,
         device: str = "cuda" if torch.cuda.is_available() else "cpu",
-        dr: bool = True,
         total_steps: Optional[int] = None,
         lr_schedule: bool = True,
         min_lr_ratio: float = 0.1,
@@ -51,7 +50,6 @@ class GRPOTrainer:
         self.clip_ratio = clip_ratio
         self.kl_coef = kl_coef
         self.device = device
-        self.dr = dr
         self.grad_clip_norm = grad_clip_norm
         
         # Learning rate scheduler setup
@@ -836,10 +834,7 @@ def main():
     parser.add_argument("--wandb_project", type=str, default="grpo-math-training", help="W&B project name")
     parser.add_argument("--wandb_run_name", type=str, default="custom-grpo", help="W&B run name")
     parser.add_argument("--eval_size", type=int, default=10, help="Number of problems for evaluation")
-    
-    # Reward normalization configuration
-    parser.add_argument("--dr", action="store_true", default=True, help="Disable reward normalization (skip length normalization and std division)")
-    
+        
     # KL threshold configuration
     parser.add_argument("--kl_threshold", type=float, default=10, help="KL divergence threshold for early stopping")
     
@@ -933,7 +928,6 @@ def main():
         lr=args.lr,
         clip_ratio=args.clip_ratio,
         kl_coef=args.kl_coef,
-        dr=args.dr,
         total_steps=total_optim_steps,
         lr_schedule=args.lr_schedule,
         min_lr_ratio=args.min_lr_ratio,
