@@ -557,7 +557,7 @@ def _create_loss_mask(tokenized_input_ids: torch.Tensor, generated_ids: torch.Te
     # The mask should be True for all positions >= prompt_length - 1 for each sequence.
     positions = torch.arange(seq_len - 1, device=device).unsqueeze(0)  # Shape: (1, seq_len - 1)
     # prompt_lengths is (batch_size,), unsqueeze to (batch_size, 1) for broadcasting
-    prompt_lengths_col = prompt_lengths.unsqueeze(1)
+    prompt_lengths_col = prompt_lengths.unsqueeze(1).to(device)
     
     loss_mask = positions >= (prompt_lengths_col - 1)
     return loss_mask
