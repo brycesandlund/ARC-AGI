@@ -671,11 +671,53 @@ def sample_and_revise(
     disable_adapter: bool, 
     enable_thinking: bool
 ):
-    """
-    Samples a batch, revises it, and returns the revised batch.
-    1. Sample a batch of completions from the base model.
-    2. Use a revision model to revise the completions.
-    3. Return the revised completions and their rewards.
+    """Samples, revises, and evaluates completions.
+
+    This function performs a two-stage generation process:
+    1. It first calls `sample()` to generate initial completions from a base model.
+    2. It then constructs new prompts that ask a `revision_model` to revise the
+       initial solutions.
+    3. It generates revised completions, calculates their rewards and advantages,
+       and returns a batch ready for training.
+
+    This is a form of self-improvement where the model refines its own output.
+
+    Parameters
+    ----------
+    model : torch.nn.Module
+        The base model for generating initial solutions.
+    tokenizer : Any
+        The tokenizer for encoding and decoding.
+    revision_model : torch.nn.Module
+        The model used to revise the initial solutions.
+    rollouts_per_prompt : int
+        Number of completions to generate per unique problem.
+    prompts_per_generation : int
+        Number of unique problems to generate.
+    max_new_tokens : int
+        Maximum number of new tokens for both initial and revised generation.
+    disable_adapter : bool
+        If True, disables the PEFT adapter during generation (if applicable).
+    enable_thinking : bool
+        If True, enables "thinking" mode in the prompt template, which can affect
+        how the model formats its chain-of-thought output.
+
+    Returns
+    -------
+    Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, List[str], List[str]]
+        A tuple containing the data from the *revised* completions:
+        - input_ids (torch.Tensor): The full token sequences of the *revised*
+          completions (revision prompt + revised completion), padded.
+          Shape: `(prompts_per_generation * rollouts_per_prompt, padded_revised_sequence_length)`
+        - rewards (torch.Tensor): A scalar reward for each *revised* sequence.
+          Shape: `(prompts_per_generation * rollouts_per_prompt,)`
+        - advantages (torch.Tensor): A normalized advantage for each *revised* sequence.
+          Shape: `(prompts_per_generation * rollouts_per_prompt,)`
+        - loss_mask (torch.Tensor): A boolean mask that is `True` only for the
+          tokens in the *revised* completion.
+          Shape: `(prompts_per_generation * rollouts_per_prompt, padded_revised_sequence_length - 1)`
+        - prompts (List[str]): The list of original prompts (from the first pass).
+        - final_completions (List[str]): The list of decoded *revised* completions.
     """
     # 1. First pass: Sample from the base model to get initial solutions
     _, _, _, _, prompts, initial_completions = sample(
@@ -684,7 +726,7 @@ def sample_and_revise(
 
     # 2. Second pass: Construct revision prompts and revise with the revision_model
     revision_prompts = []
-    for i in range(rollouts_per_prompt):
+    for i in range(len(prompts)):
         full_sequence_text = prompts[i] + initial_completions[i]
         # For revision, we can just use the initial completion's reward, though it's not strictly necessary.
         # Here, we will just pass a placeholder since the prompt is about revision.
@@ -729,7 +771,43 @@ The revised completion should be in the format: <think>chain-of-thought</think> 
 
 
 def sample(model, tokenizer, rollouts_per_prompt: int = 4, prompts_per_generation: int = 1, max_new_tokens: int = 512):
-    """Generate a batch of math problems and model completions for GRPO training."""
+    """Generate a batch of math problems and model completions for GRPO training.
+
+    This function first generates a set of unique math problems, then duplicates them
+    to create a batch of prompts for generating multiple rollouts. It then uses
+    the model to generate completions for these prompts. Finally, it computes
+    rewards and advantages for the generated sequences.
+
+    Parameters
+    ----------
+    model : torch.nn.Module
+        The model to use for generating completions.
+    tokenizer : Any
+        The tokenizer for encoding prompts and decoding completions.
+    rollouts_per_prompt : int, optional
+        Number of completions to generate for each unique problem, by default 4.
+    prompts_per_generation : int, optional
+        Number of unique math problems to generate, by default 1.
+    max_new_tokens : int, optional
+        Maximum number of new tokens to generate for each completion, by default 512.
+
+    Returns
+    -------
+    Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, List[str], List[str]]
+        A tuple containing:
+        - input_ids (torch.Tensor): The full token sequences (prompt + completion),
+          padded to the same length.
+          Shape: `(prompts_per_generation * rollouts_per_prompt, padded_sequence_length)`
+        - rewards (torch.Tensor): A scalar reward for each generated sequence.
+          Shape: `(prompts_per_generation * rollouts_per_prompt,)`
+        - advantages (torch.Tensor): A normalized advantage value for each sequence.
+          Shape: `(prompts_per_generation * rollouts_per_prompt,)`
+        - loss_mask (torch.Tensor): A boolean mask that is `True` only for the
+          generated (completion) tokens.
+          Shape: `(prompts_per_generation * rollouts_per_prompt, padded_sequence_length - 1)`
+        - prompts (List[str]): The list of prompts used for generation.
+        - completions (List[str]): The list of decoded model completions.
+    """
     
     # Generate `prompts_per_generation` unique math problems
     problem_generator = generate_math_problems(tokenizer, prompts_per_generation)
