@@ -253,6 +253,7 @@ class GRPOTrainer:
         batch_size: int,
         epochs_per_batch: int,
         rollouts_per_prompt: int,
+        prompts_per_generation: int,
         max_new_tokens: int,
         eval_dataset: Optional[Any] = None,
         use_wandb: bool = False,
@@ -310,12 +311,13 @@ class GRPOTrainer:
                         tokenizer=tokenizer,
                         revision_model=self.model,
                         rollouts_per_prompt=rollouts_per_prompt,
+                        prompts_per_generation=prompts_per_generation,
                         max_new_tokens=max_new_tokens,
                         disable_adapter=False,
                         enable_thinking=False
                     )
                 else:
-                    batch = sample(self.model, tokenizer, rollouts_per_prompt=rollouts_per_prompt, max_new_tokens=max_new_tokens)
+                    batch = sample(self.model, tokenizer, rollouts_per_prompt=rollouts_per_prompt, prompts_per_generation=prompts_per_generation, max_new_tokens=max_new_tokens)
                 
                 input_ids, rewards, advantages, loss_mask, _, _ = batch
                 
@@ -547,8 +549,9 @@ def _create_loss_mask(prompt_len: int, seq_len: int, device: torch.device) -> to
     return loss_mask
 
 
-def compute_sequence_advantages(rewards: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
+def compute_sequence_advantages(rewards: torch.Tensor, prompts_per_generation: int, rollouts_per_prompt: int, eps: float = 1e-8) -> torch.Tensor:
     """Compute simple per-sequence advantages by normalizing rewards.
+    Advantages are computed on a per-prompt basis.
 
     advantages = (rewards - mean) / (std + eps)
 
@@ -556,6 +559,10 @@ def compute_sequence_advantages(rewards: torch.Tensor, eps: float = 1e-8) -> tor
     ----------
     rewards : torch.Tensor
         Tensor of shape (B,) with scalar rewards per sequence
+    prompts_per_generation : int
+        Number of unique prompts per generation
+    rollouts_per_prompt : int
+        Number of rollouts per prompt
     eps : float
         Small value to avoid division by zero
 
@@ -565,7 +572,19 @@ def compute_sequence_advantages(rewards: torch.Tensor, eps: float = 1e-8) -> tor
         Tensor of shape (B,) with a single advantage per sequence
     """
     rewards = rewards.float()
-    return (rewards - rewards.mean()) / (rewards.std() + eps)
+    
+    # Reshape rewards to (prompts_per_generation, rollouts_per_prompt)
+    rewards_per_prompt = rewards.view(prompts_per_generation, rollouts_per_prompt)
+    
+    # Compute mean and std per prompt
+    mean_per_prompt = rewards_per_prompt.mean(dim=1, keepdim=True)
+    std_per_prompt = rewards_per_prompt.std(dim=1, keepdim=True)
+    
+    # Normalize rewards per prompt
+    advantages_per_prompt = (rewards_per_prompt - mean_per_prompt) / (std_per_prompt + eps)
+    
+    # Flatten advantages back to (B,)
+    return advantages_per_prompt.view(-1)
 
 
 def generate_and_decode(model, tokenizer, prompts, max_new_tokens, disable_adapter=False, enable_thinking: bool = True, **gen_kwargs):
@@ -633,6 +652,7 @@ def sample_and_revise(
     tokenizer, 
     revision_model,
     rollouts_per_prompt: int, 
+    prompts_per_generation: int,
     max_new_tokens: int, 
     disable_adapter: bool, 
     enable_thinking: bool
@@ -645,7 +665,7 @@ def sample_and_revise(
     """
     # 1. First pass: Sample from the base model to get initial solutions
     _, _, _, _, prompts, initial_completions = sample(
-        model, tokenizer, rollouts_per_prompt, max_new_tokens
+        model, tokenizer, rollouts_per_prompt, prompts_per_generation, max_new_tokens
     )
 
     # 2. Second pass: Construct revision prompts and revise with the revision_model
@@ -685,7 +705,7 @@ The revised completion should be in the format: <think>chain-of-thought</think> 
     
     # Create the batch from prompts and generated completions
     rewards = torch.tensor(math_reward_func(final_completions, prompts), dtype=torch.float32)
-    advantages = compute_sequence_advantages(rewards)
+    advantages = compute_sequence_advantages(rewards, prompts_per_generation, rollouts_per_prompt)
     prompt_length = revised_tokenized_input_ids.shape[1]
     sequence_length = revised_generated_ids.shape[1]
     input_ids = revised_generated_ids
@@ -697,15 +717,17 @@ The revised completion should be in the format: <think>chain-of-thought</think> 
     return input_ids, rewards, advantages, loss_mask, prompts, final_completions
 
 
-def sample(model, tokenizer, rollouts_per_prompt: int = 4, max_new_tokens: int = 512):
+def sample(model, tokenizer, rollouts_per_prompt: int = 4, prompts_per_generation: int = 1, max_new_tokens: int = 512):
     """Generate a batch of math problems and model completions for GRPO training."""
     
-    # Generate one math problem and use it for all batch elements
-    problem_generator = generate_math_problems(tokenizer, 1)
-    single_problem = next(problem_generator)
-    problems = [single_problem for _ in range(rollouts_per_prompt)]
+    # Generate `prompts_per_generation` unique math problems
+    problem_generator = generate_math_problems(tokenizer, prompts_per_generation)
+    unique_problems = list(problem_generator)
     
-    # Extract prompts (all the same now)
+    # Duplicate each problem `rollouts_per_prompt` times
+    problems = [problem for problem in unique_problems for _ in range(rollouts_per_prompt)]
+    
+    # Extract prompts
     prompts = [problem["prompt"] for problem in problems]
 
     # Generate completions using the model
@@ -713,7 +735,7 @@ def sample(model, tokenizer, rollouts_per_prompt: int = 4, max_new_tokens: int =
     
     # Create the batch from prompts and generated completions
     rewards = torch.tensor(math_reward_func(completions, prompts), dtype=torch.float32)
-    advantages = compute_sequence_advantages(rewards)
+    advantages = compute_sequence_advantages(rewards, prompts_per_generation, rollouts_per_prompt)
     prompt_length = tokenized_input_ids.shape[1]
     sequence_length = generated_ids.shape[1]
     
@@ -807,6 +829,7 @@ def main():
     parser.add_argument("--lr", type=float, default=1e-5, help="Learning rate")
     parser.add_argument("--steps", type=int, default=40, help="Total number of optimization steps.")
     parser.add_argument("--rollouts_per_prompt", type=int, default=8, help="Number of rollouts per prompt.")
+    parser.add_argument("--prompts_per_generation", type=int, default=1, help="Number of unique prompts for each generation step.")
     parser.add_argument("--clip_ratio", type=float, default=0.2, help="PPO-style clip ratio")
     parser.add_argument("--kl_coef", type=float, default=0.01, help="KL penalty coefficient")
     parser.add_argument("--max_new_tokens", type=int, default=1200, help="Maximum new tokens to generate")
@@ -955,6 +978,7 @@ def main():
         batch_size=args.batch_size,
         epochs_per_batch=args.epochs_per_batch,
         rollouts_per_prompt=args.rollouts_per_prompt,
+        prompts_per_generation=args.prompts_per_generation,
         max_new_tokens=args.max_new_tokens,
         eval_dataset=eval_dataset,
         use_wandb=args.use_wandb,
