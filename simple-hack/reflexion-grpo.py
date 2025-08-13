@@ -531,29 +531,35 @@ def _extract_completions(tokenizer, generated_ids: torch.Tensor, input_ids: torc
     return completions
 
 
-def _create_loss_mask(prompt_len: int, seq_len: int, device: torch.device) -> torch.Tensor:
-    """Creates a boolean mask for the loss calculation.
+def _create_loss_mask(tokenized_input_ids: torch.Tensor, generated_ids: torch.Tensor) -> torch.Tensor:
+    """Creates a boolean mask for the loss calculation on a batch of sequences.
     
     The mask is `True` for tokens that should be included in the loss (i.e., the generated tokens)
     and `False` for tokens that should be excluded (i.e., the prompt tokens).
 
     Parameters
     ----------
-    prompt_len : int
-        The length of the prompt.
-    seq_len : int
-        The total length of the sequence (prompt + generated).
-    device : torch.device
-        The device to create the tensor on.
+    tokenized_input_ids : torch.Tensor
+        A 2D tensor of shape (batch_size, prompt_len) with the tokenized prompts.
+    generated_ids : torch.Tensor
+        A 2D tensor of shape (batch_size, seq_len) with the full generated sequences.
 
     Returns
     -------
     torch.Tensor
-        A boolean tensor of shape (seq_len - 1,)
+        A boolean tensor of shape (batch_size, seq_len - 1).
     """
+    prompt_lengths = (tokenized_input_ids != PAD_TOKEN_ID).sum(dim=1)
+    seq_len = generated_ids.shape[1]
+    device = generated_ids.device
+    
     # The loss is calculated on logits, which have a sequence length of T-1.
-    # The mask should be True for all positions >= prompt_len - 1.
-    loss_mask = torch.arange(seq_len - 1, device=device) >= prompt_len - 1
+    # The mask should be True for all positions >= prompt_length - 1 for each sequence.
+    positions = torch.arange(seq_len - 1, device=device).unsqueeze(0)  # Shape: (1, seq_len - 1)
+    # prompt_lengths is (batch_size,), unsqueeze to (batch_size, 1) for broadcasting
+    prompt_lengths_col = prompt_lengths.unsqueeze(1)
+    
+    loss_mask = positions >= (prompt_lengths_col - 1)
     return loss_mask
 
 
@@ -714,13 +720,10 @@ The revised completion should be in the format: <think>chain-of-thought</think> 
     # Create the batch from prompts and generated completions
     rewards = torch.tensor(math_reward_func(final_completions, prompts), dtype=torch.float32)
     advantages = compute_sequence_advantages(rewards, prompts_per_generation, rollouts_per_prompt)
-    prompt_length = revised_tokenized_input_ids.shape[1]
-    sequence_length = revised_generated_ids.shape[1]
     input_ids = revised_generated_ids
 
     # Create a loss mask for the revised sequence
-    loss_mask = _create_loss_mask(prompt_length, sequence_length, revised_generated_ids.device)
-    loss_mask = loss_mask.expand(revised_generated_ids.shape[0], -1)
+    loss_mask = _create_loss_mask(revised_tokenized_input_ids, revised_generated_ids)
     
     return input_ids, rewards, advantages, loss_mask, prompts, final_completions
 
@@ -744,12 +747,9 @@ def sample(model, tokenizer, rollouts_per_prompt: int = 4, prompts_per_generatio
     # Create the batch from prompts and generated completions
     rewards = torch.tensor(math_reward_func(completions, prompts), dtype=torch.float32)
     advantages = compute_sequence_advantages(rewards, prompts_per_generation, rollouts_per_prompt)
-    prompt_length = tokenized_input_ids.shape[1]
-    sequence_length = generated_ids.shape[1]
     
     # Create a loss mask that is True for generated tokens and False for prompt tokens.
-    loss_mask = _create_loss_mask(prompt_length, sequence_length, generated_ids.device)
-    loss_mask = loss_mask.expand(generated_ids.shape[0], -1)
+    loss_mask = _create_loss_mask(tokenized_input_ids, generated_ids)
 
     input_ids = generated_ids
 
