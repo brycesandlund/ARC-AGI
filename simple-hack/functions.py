@@ -240,18 +240,18 @@ def generate_math_problems(tokenizer, dataset_size):
             numbers_str = ", ".join(map(str, numbers))
             prompt_content = f"Using the numbers {numbers_str} exactly once in mathematical notation using addition, subtraction, multiplication, division, and/or parentheses, create an expression that equals {target}. Keep your reasoning in the <think> block brief. Answer exactly in plain mathematical notation (DO NOT USE LATEX), WITH NO ADDITIONAL TEXT. For example, if the provided numbers are 8, 3, 2, 3, a valid answer would be: (3 / 3 + 2) * 8. Or, if the numbers were 8, 2, 9, 9, a valid answer would be 9 + 9 - 2 + 8. ANSWER AS SOON AS A CORRECT EXPRESSION IS FOUND. Do not include = {target} in your answer."
             
-            messages = [{"role": "user", "content": prompt_content}]
+            # messages = [{"role": "user", "content": prompt_content}]
             
-            # Apply chat template with thinking mode enabled
-            prompt = tokenizer.apply_chat_template(
-                messages,
-                tokenize=False,
-                add_generation_prompt=True,
-                enable_thinking=True
-            )
+            # # Apply chat template with thinking mode enabled
+            # prompt = tokenizer.apply_chat_template(
+            #     messages,
+            #     tokenize=False,
+            #     add_generation_prompt=True,
+            #     enable_thinking=True
+            # )
             
             yield {
-                "prompt": prompt,
+                "prompt": prompt_content,
                 "target": target,
                 "numbers": numbers
             }
