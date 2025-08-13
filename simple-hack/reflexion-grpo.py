@@ -303,7 +303,7 @@ class GRPOTrainer:
             step_success_rates = []
 
             print(f"\nCollecting experience for collection step {collection_step}/{collection_steps}...")
-            for micro_step in range(batch_size):
+            for micro_step in range(batch_size // prompts_per_generation):
                 # Sample a fresh batch for each accumulation step
                 if use_revision:
                     batch = sample_and_revise(
@@ -333,13 +333,21 @@ class GRPOTrainer:
                     
                     old_logp = self._old_log_probs(logits, target_actions)
                 
-                experience_buffer.append({
-                    'input_ids': input_ids, 
-                    'rewards': rewards,
-                    'advantages': advantages,
-                    'loss_mask': loss_mask,
-                    'old_logp': old_logp
-                })
+                # Split the tensors by prompt
+                input_ids_chunks = torch.split(input_ids, rollouts_per_prompt)
+                rewards_chunks = torch.split(rewards, rollouts_per_prompt)
+                advantages_chunks = torch.split(advantages, rollouts_per_prompt)
+                loss_mask_chunks = torch.split(loss_mask, rollouts_per_prompt)
+                old_logp_chunks = torch.split(old_logp, rollouts_per_prompt)
+
+                for i in range(prompts_per_generation):
+                    experience_buffer.append({
+                        'input_ids': input_ids_chunks[i], 
+                        'rewards': rewards_chunks[i],
+                        'advantages': advantages_chunks[i],
+                        'loss_mask': loss_mask_chunks[i],
+                        'old_logp': old_logp_chunks[i]
+                    })
                 
                 # Track and log rewards from this collection micro-batch
                 batch_reward_mean = rewards.mean().item()
@@ -347,7 +355,7 @@ class GRPOTrainer:
                 step_rewards_mean.append(batch_reward_mean)
                 step_rewards_max.append(rewards.max().item())
                 step_success_rates.append((rewards > 0).float().mean().item())
-                print(f"  Collected micro-batch {micro_step+1}/{batch_size} | reward: {batch_reward_mean:.3f}")
+                print(f"  Collected micro-batch {micro_step+1}/{batch_size // prompts_per_generation} | reward: {batch_reward_mean:.3f}")
             
             # --- 2. Optimization Phase ---
             kl_exceeded = False
