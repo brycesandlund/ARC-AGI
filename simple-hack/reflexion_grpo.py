@@ -376,12 +376,12 @@ class GRPOTrainer:
                     # Iterate over the collected experience in the minibatch
                     for micro_batch_data in minibatch:
 
-                        debug_batch_and_actions(
-                            tokenizer,
-                            micro_batch_data['input_ids'],
-                            micro_batch_data['loss_mask'],
-                            context="Training Minibatch"
-                        )
+                        # debug_batch_and_actions(
+                        #     tokenizer,
+                        #     micro_batch_data['input_ids'],
+                        #     micro_batch_data['loss_mask'],
+                        #     context="Training Minibatch"
+                        # )
 
                         # Compute loss for the micro-batch using the pre-computed old_logp
                         metrics = self.compute_loss(
