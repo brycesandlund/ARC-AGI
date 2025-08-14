@@ -77,10 +77,21 @@ class GRPOTrainer:
             self.grad_clip_norm = float('inf')
             print("Gradient clipping disabled")
 
-    def _old_log_probs(self, logits: torch.Tensor, actions: torch.Tensor) -> torch.Tensor:
-        """Return log-probabilities of `actions` under the policy that produced `logits`."""
+    def _compute_log_probs(self, model: torch.nn.Module, input_ids: torch.Tensor, disable_adapter: bool = False) -> torch.Tensor:
+        """Computes log probabilities for a given model and input_ids."""
+        input_ids = input_ids.to(self.device)
+        attention_mask = (input_ids != PAD_TOKEN_ID).long()
+        target_actions = input_ids[:, 1:]
+
+        if disable_adapter and hasattr(model, "disable_adapter"):
+            with model.disable_adapter():
+                outputs = model(input_ids, attention_mask=attention_mask)
+        else:
+            outputs = model(input_ids, attention_mask=attention_mask)
+        
+        logits = outputs.logits[:, :-1, :]
         log_probs = F.log_softmax(logits, dim=-1)
-        return log_probs.gather(-1, actions.unsqueeze(-1)).squeeze(-1)
+        return log_probs.gather(-1, target_actions.unsqueeze(-1)).squeeze(-1)
 
     def _pg_loss(
         self,
@@ -145,27 +156,14 @@ class GRPOTrainer:
         input_ids = input_ids.to(self.device)
         loss_mask = loss_mask.to(self.device)
 
-        # Construct an attention mask (1 for real tokens, 0 for PAD)
-        attention_mask = (input_ids != PAD_TOKEN_ID).long()
-
-        # Forward pass to get new logits
-        outputs = self.model(input_ids, attention_mask=attention_mask)
-        logits = outputs.logits[:, :-1, :]  # Shape: (B, T-1, V)
-        
-        # The "actions" for loss calculation are the input_ids shifted
-        target_actions = input_ids[:, 1:]
-
         # Compute reference log-probs
         with torch.no_grad():
-            if hasattr(self.model, "disable_adapter"):
-                with self.model.disable_adapter():
-                    ref_outputs = self.model(input_ids, attention_mask=attention_mask)
-            else:
-                ref_outputs = self.ref_model(input_ids, attention_mask=attention_mask)
-
-            ref_logits = ref_outputs.logits[:, :-1, :]
-            ref_logp_full = self._old_log_probs(ref_logits, target_actions)
-            ref_logp = ref_logp_full[loss_mask] # Apply mask
+            ref_logp_full = self._compute_log_probs(
+                model=self.ref_model,
+                input_ids=input_ids,
+                disable_adapter=True,
+            )
+            ref_logp = ref_logp_full[loss_mask]
 
         # Compute old log-probs from full distribution
         old_logp_full = old_logp_full.to(self.device)
@@ -179,7 +177,7 @@ class GRPOTrainer:
         advantages = torch.repeat_interleave(seq_advantages, token_counts_per_sequence)
 
         # New log-probabilities for gradient flow
-        new_logp_full = self._old_log_probs(logits, target_actions)
+        new_logp_full = self._compute_log_probs(self.model, input_ids)
         new_logp = new_logp_full[loss_mask] # Apply mask
 
         # Calculate model entropy over the generated tokens for logging
@@ -320,16 +318,7 @@ class GRPOTrainer:
                 input_ids, rewards, advantages, loss_mask, prompts, final_completions = batch
                 
                 with torch.no_grad():
-                    attn = (input_ids != PAD_TOKEN_ID).long().to(self.device)
-                    outputs = self.model(input_ids.to(self.device), attention_mask=attn)
-                    
-                    # Extract logits for the entire sequence, then mask them in the loss function
-                    logits = outputs.logits[:, :-1, :] 
-                    
-                    # The "actions" are just the input_ids shifted for prediction
-                    target_actions = input_ids[:, 1:].to(self.device)
-                    
-                    old_logp_full = self._old_log_probs(logits, target_actions)
+                    old_logp_full = self._compute_log_probs(self.model, input_ids)
                 
                 # Split the tensors by prompt
                 input_ids_chunks = torch.split(input_ids, rollouts_per_prompt)
@@ -958,7 +947,7 @@ def main():
     parser.add_argument("--use_lora", action="store_true", default=True, help="Use LoRA for parameter-efficient fine-tuning")
     parser.add_argument("--lora_r", type=int, default=16, help="LoRA rank")
     parser.add_argument("--lora_alpha", type=int, default=32, help="LoRA alpha scaling parameter")
-    parser.add_argument("--lora_dropout", type=float, default=0.1, help="LoRA dropout")
+    parser.add_argument("--lora_dropout", type=float, default=0.0, help="LoRA dropout")
     
     # Memory optimization
     parser.add_argument("--gradient_checkpointing", action="store_true", default=True, help="Enable gradient checkpointing to save memory")
