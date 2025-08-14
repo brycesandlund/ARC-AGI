@@ -34,7 +34,7 @@ def debug_batch_and_actions(tokenizer, input_ids, loss_mask, context="DEBUG"):
     
     print(f"--- Finished Debug Print: {context} ---\n")
 
-def test_sample(input_ids, rewards, advantages, loss_mask, prompts, completions, rollouts_per_prompt, prompts_per_generation, tokenized_input_ids):
+def test_sample(input_ids, rewards, advantages, loss_mask, prompts, completions, rollouts_per_prompt, prompts_per_generation):
     """
     A simple test function to check the shapes and contents of the sample function's return values.
     """

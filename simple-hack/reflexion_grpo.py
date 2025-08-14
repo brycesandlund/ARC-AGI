@@ -528,7 +528,13 @@ def generate_with_cache(model, **kwargs):
 
 
 def _extract_completions_and_create_loss_mask(tokenizer, generated_ids: torch.Tensor, input_ids: torch.Tensor) -> Tuple[List[str], torch.Tensor]:
-    """Decodes generated token sequences, extracts completions, and creates a loss mask."""
+    """Decodes generated token sequences, extracts completions, and creates a loss mask.
+
+    Mask construction:
+    - Computes a single-row mask of shape (1, T-1) where positions >= prompt_length-1 are True.
+    - Expands this mask to (B, T-1) to match the batch size for downstream boolean indexing.
+    - Excludes PAD tokens from the loss calculation.
+    """
     # Slice the generated_ids tensor to get only the tokens that were generated after the prompt.
     completion_ids = generated_ids[:, input_ids.shape[1]:]
     
@@ -543,7 +549,12 @@ def _extract_completions_and_create_loss_mask(tokenizer, generated_ids: torch.Te
     # The loss is calculated on logits, which have a sequence length of T-1.
     # The mask should be True for all positions >= prompt_length - 1.
     positions = torch.arange(seq_len - 1, device=device).unsqueeze(0)  # Shape: (1, seq_len - 1)
-    loss_mask = positions >= (prompt_len - 1)
+    position_mask = positions >= (prompt_len - 1)  # (1, T-1)
+    position_mask = position_mask.expand(generated_ids.size(0), -1)  # (B, T-1)
+
+    # Also mask out pad tokens.
+    not_pad_mask = (generated_ids[:, 1:] != PAD_TOKEN_ID)
+    loss_mask = position_mask & not_pad_mask
     
     return completions, loss_mask
 
@@ -634,7 +645,7 @@ def generate_and_decode(model, tokenizer, prompts, max_new_tokens, disable_adapt
         tokenizer.apply_chat_template(
             messages,
             tokenize=False,
-            # add_generation_prompt=True,
+            add_generation_prompt=True, # Note: Transformers recommends not using this during training but you get gibberish w/o it
             enable_thinking=enable_thinking
         ) for messages in messages_list
     ]
@@ -665,15 +676,15 @@ def generate_and_decode(model, tokenizer, prompts, max_new_tokens, disable_adapt
     is_pad_tensor = (generated_ids == PAD_TOKEN_ID)
     is_eos_tensor = (generated_ids == EOS_TOKEN_ID)
     
-    torch.set_printoptions(threshold=10_000, linewidth=200)
-    print("Generated IDs shape:", generated_ids.shape)
-    print("Pad token ID:", PAD_TOKEN_ID)
-    print("EOS token ID:", EOS_TOKEN_ID)
-    print("is_pad_tensor (generated_ids == PAD_TOKEN_ID):")
-    print(is_pad_tensor)
-    print("is_eos_tensor (generated_ids == EOS_TOKEN_ID):")
-    print(is_eos_tensor)
-    print(tokenizer.batch_decode(generated_ids))
+    # torch.set_printoptions(threshold=10_000, linewidth=200)
+    # print("Generated IDs shape:", generated_ids.shape)
+    # print("Pad token ID:", PAD_TOKEN_ID)
+    # print("EOS token ID:", EOS_TOKEN_ID)
+    # print("is_pad_tensor (generated_ids == PAD_TOKEN_ID):")
+    # print(is_pad_tensor)
+    # print("is_eos_tensor (generated_ids == EOS_TOKEN_ID):")
+    # print(is_eos_tensor)
+    # print(tokenizer.batch_decode(generated_ids))
         
     # Extract, decode, and return completions using token-based slicing.
     completions, loss_mask = _extract_completions_and_create_loss_mask(tokenizer, generated_ids, tokenized["input_ids"])
@@ -847,8 +858,8 @@ def sample(model, tokenizer, rollouts_per_prompt: int = 4, prompts_per_generatio
     advantages = compute_sequence_advantages(rewards, prompts_per_generation, rollouts_per_prompt)
     input_ids = generated_ids
 
-    # test_sample(input_ids, rewards, advantages, loss_mask, prompts, completions, rollouts_per_prompt, prompts_per_generation, tokenized_input_ids)
-    debug_batch_and_actions(tokenizer, input_ids, loss_mask, context="Data Sampling")
+    # test_sample(input_ids, rewards, advantages, loss_mask, prompts, completions, rollouts_per_prompt, prompts_per_generation)
+    # debug_batch_and_actions(tokenizer, input_ids, loss_mask, context="Data Sampling")
 
     return input_ids, rewards, advantages, loss_mask, prompts, completions
 
