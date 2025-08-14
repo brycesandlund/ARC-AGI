@@ -15,6 +15,7 @@ from datasets import Dataset
 
 # Import math problem generation and reward functions
 from functions import generate_math_problems, math_reward_func, parse_completion
+from reflexion_grpo_tests import test_sample
 
 # Global token IDs - initialized in main() after tokenizer is loaded
 PAD_TOKEN_ID = None
@@ -126,7 +127,7 @@ class GRPOTrainer:
         self,
         input_ids: torch.Tensor,
         loss_mask: torch.Tensor,
-        old_logp: torch.Tensor,
+        old_logp_full: torch.Tensor,
         advantages_per_sequence: torch.Tensor,
         rollouts_per_prompt: int,
     ) -> Dict[str, Any]:
@@ -137,7 +138,7 @@ class GRPOTrainer:
         ----------
         input_ids : (B, T) full sequence tokens (prompt + generated)
         loss_mask  : (B, T-1) mask indicating which tokens are part of the sequence to compute loss for
-        old_logp   : Old log probabilities. Either flattened to match masked positions or full (B, T-1) to be masked
+        old_logp_full   : (B, T-1) full old log probabilities from the policy before optimization.
         advantages_per_sequence : (B,) single scalar advantage per sequence
         rollouts_per_prompt : number of rollouts to normalize loss by
         """
@@ -166,12 +167,9 @@ class GRPOTrainer:
             ref_logp_full = self._old_log_probs(ref_logits, target_actions)
             ref_logp = ref_logp_full[loss_mask] # Apply mask
 
-        # Ensure provided old_logp is on device and aligned to masked positions
-        old_logp = old_logp.to(self.device)
-        # If provided as full (B, T-1), apply mask to flatten; if already 1D, leave as is
-        # Note that current code _indeed_ supplies a full (B, T-1) tensor, so we need to mask it.
-        if old_logp.dim() == 2:
-            old_logp = old_logp[loss_mask]
+        # Compute old log-probs from full distribution
+        old_logp_full = old_logp_full.to(self.device)
+        old_logp = old_logp_full[loss_mask] # Apply mask
 
         # Advantages are provided per-sequence; expand to per-token via repeat_interleave
         seq_advantages = advantages_per_sequence.to(self.device)
@@ -319,7 +317,7 @@ class GRPOTrainer:
                 else:
                     batch = sample(self.model, tokenizer, rollouts_per_prompt=rollouts_per_prompt, prompts_per_generation=prompts_per_generation, max_new_tokens=max_new_tokens)
                 
-                input_ids, rewards, advantages, loss_mask, _, _ = batch
+                input_ids, rewards, advantages, loss_mask, prompts, final_completions = batch
                 
                 with torch.no_grad():
                     attn = (input_ids != PAD_TOKEN_ID).long().to(self.device)
@@ -331,14 +329,14 @@ class GRPOTrainer:
                     # The "actions" are just the input_ids shifted for prediction
                     target_actions = input_ids[:, 1:].to(self.device)
                     
-                    old_logp = self._old_log_probs(logits, target_actions)
+                    old_logp_full = self._old_log_probs(logits, target_actions)
                 
                 # Split the tensors by prompt
                 input_ids_chunks = torch.split(input_ids, rollouts_per_prompt)
                 rewards_chunks = torch.split(rewards, rollouts_per_prompt)
                 advantages_chunks = torch.split(advantages, rollouts_per_prompt)
                 loss_mask_chunks = torch.split(loss_mask, rollouts_per_prompt)
-                old_logp_chunks = torch.split(old_logp, rollouts_per_prompt)
+                old_logp_full_chunks = torch.split(old_logp_full, rollouts_per_prompt)
 
                 for i in range(prompts_per_generation):
                     experience_buffer.append({
@@ -346,7 +344,7 @@ class GRPOTrainer:
                         'rewards': rewards_chunks[i],
                         'advantages': advantages_chunks[i],
                         'loss_mask': loss_mask_chunks[i],
-                        'old_logp': old_logp_chunks[i]
+                        'old_logp_full': old_logp_full_chunks[i]
                     })
                 
                 # Track and log rewards from this collection micro-batch
@@ -377,11 +375,14 @@ class GRPOTrainer:
 
                     # Iterate over the collected experience in the minibatch
                     for micro_batch_data in minibatch:
+
+                        
+
                         # Compute loss for the micro-batch using the pre-computed old_logp
                         metrics = self.compute_loss(
                             input_ids=micro_batch_data['input_ids'],
                             loss_mask=micro_batch_data['loss_mask'],
-                            old_logp=micro_batch_data['old_logp'],
+                            old_logp_full=micro_batch_data['old_logp_full'],
                             advantages_per_sequence=micro_batch_data['advantages'],
                             rollouts_per_prompt=rollouts_per_prompt,
                         )
@@ -830,6 +831,8 @@ def sample(model, tokenizer, rollouts_per_prompt: int = 4, prompts_per_generatio
     loss_mask = _create_loss_mask(tokenized_input_ids, generated_ids)
 
     input_ids = generated_ids
+
+    test_sample(input_ids, rewards, advantages, loss_mask, prompts, completions, rollouts_per_prompt, prompts_per_generation, tokenized_input_ids)
 
     return input_ids, rewards, advantages, loss_mask, prompts, completions
 
