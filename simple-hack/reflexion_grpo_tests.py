@@ -1,6 +1,40 @@
 import torch
 
-def test_sample(input_ids, rewards, advantages, loss_mask, prompts, completions, rollouts_per_prompt, prompts_per_generation):
+def debug_batch_and_actions(tokenizer, input_ids, loss_mask, context="DEBUG"):
+    """
+    Prints decoded input_ids, target_actions, and masked target_actions for debugging.
+    """
+    print(f"\n--- Running Debug Print: {context} ---")
+    torch.set_printoptions(threshold=10_000, linewidth=200)
+    
+    # 1. Decode and print input_ids
+    decoded_input_ids = tokenizer.batch_decode(input_ids, skip_special_tokens=False)
+    print("--- Full Decoded input_ids ---")
+    for i, seq in enumerate(decoded_input_ids):
+        print(f"Sample {i}: {seq}")
+
+    # 2. Generate and print target_actions
+    target_action_ids = input_ids[:, 1:]
+    # print("\n--- Target Actions (Token IDs) ---")
+    # print(target_action_ids)
+
+    decoded_target_actions = tokenizer.batch_decode(target_action_ids, skip_special_tokens=False)
+    print("\n--- Decoded Target Actions ---")
+    for i, seq in enumerate(decoded_target_actions):
+        print(f"Sample {i}: {seq}")
+
+    # 3. Print masked target_actions
+    masked_target_action_ids = target_action_ids[loss_mask]
+    # print("\n--- Masked Target Actions (Token IDs) ---")
+    # print(masked_target_action_ids)
+
+    decoded_masked_actions = tokenizer.decode(masked_target_action_ids, skip_special_tokens=False)
+    print("\n--- Decoded Masked Target Actions ---")
+    print(decoded_masked_actions)
+    
+    print(f"--- Finished Debug Print: {context} ---\n")
+
+def test_sample(input_ids, rewards, advantages, loss_mask, prompts, completions, rollouts_per_prompt, prompts_per_generation, tokenized_input_ids):
     """
     A simple test function to check the shapes and contents of the sample function's return values.
     """

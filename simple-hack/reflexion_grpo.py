@@ -15,7 +15,7 @@ from datasets import Dataset
 
 # Import math problem generation and reward functions
 from functions import generate_math_problems, math_reward_func, parse_completion
-from reflexion_grpo_tests import test_sample
+from reflexion_grpo_tests import test_sample, debug_batch_and_actions
 
 # Global token IDs - initialized in main() after tokenizer is loaded
 PAD_TOKEN_ID = None
@@ -376,7 +376,12 @@ class GRPOTrainer:
                     # Iterate over the collected experience in the minibatch
                     for micro_batch_data in minibatch:
 
-                        
+                        debug_batch_and_actions(
+                            tokenizer,
+                            micro_batch_data['input_ids'],
+                            micro_batch_data['loss_mask'],
+                            context="Training Minibatch"
+                        )
 
                         # Compute loss for the micro-batch using the pre-computed old_logp
                         metrics = self.compute_loss(
@@ -522,46 +527,25 @@ def generate_with_cache(model, **kwargs):
     return generated_ids
 
 
-def _extract_completions(tokenizer, generated_ids: torch.Tensor, input_ids: torch.Tensor) -> List[str]:
-    """Decodes generated token sequences and extracts the completions by slicing the token tensors."""
+def _extract_completions_and_create_loss_mask(tokenizer, generated_ids: torch.Tensor, input_ids: torch.Tensor) -> Tuple[List[str], torch.Tensor]:
+    """Decodes generated token sequences, extracts completions, and creates a loss mask."""
     # Slice the generated_ids tensor to get only the tokens that were generated after the prompt.
     completion_ids = generated_ids[:, input_ids.shape[1]:]
     
     # Decode the completion tokens, skipping special tokens.
     completions = tokenizer.batch_decode(completion_ids, skip_special_tokens=True)
-    return completions
 
-
-def _create_loss_mask(tokenized_input_ids: torch.Tensor, generated_ids: torch.Tensor) -> torch.Tensor:
-    """Creates a boolean mask for the loss calculation on a batch of sequences.
-    
-    The mask is `True` for tokens that should be included in the loss (i.e., the generated tokens)
-    and `False` for tokens that should be excluded (i.e., the prompt tokens).
-
-    Parameters
-    ----------
-    tokenized_input_ids : torch.Tensor
-        A 2D tensor of shape (batch_size, prompt_len) with the tokenized prompts.
-    generated_ids : torch.Tensor
-        A 2D tensor of shape (batch_size, seq_len) with the full generated sequences.
-
-    Returns
-    -------
-    torch.Tensor
-        A boolean tensor of shape (batch_size, seq_len - 1).
-    """
-    prompt_lengths = (tokenized_input_ids != PAD_TOKEN_ID).sum(dim=1)
+    # Create the loss mask.
+    prompt_len = input_ids.shape[1]
     seq_len = generated_ids.shape[1]
     device = generated_ids.device
     
     # The loss is calculated on logits, which have a sequence length of T-1.
-    # The mask should be True for all positions >= prompt_length - 1 for each sequence.
+    # The mask should be True for all positions >= prompt_length - 1.
     positions = torch.arange(seq_len - 1, device=device).unsqueeze(0)  # Shape: (1, seq_len - 1)
-    # prompt_lengths is (batch_size,), unsqueeze to (batch_size, 1) for broadcasting
-    prompt_lengths_col = prompt_lengths.unsqueeze(1).to(device)
+    loss_mask = positions >= (prompt_len - 1)
     
-    loss_mask = positions >= (prompt_lengths_col - 1)
-    return loss_mask
+    return completions, loss_mask
 
 
 def compute_sequence_advantages(rewards: torch.Tensor, prompts_per_generation: int, rollouts_per_prompt: int, eps: float = 1e-8) -> torch.Tensor:
@@ -603,10 +587,46 @@ def compute_sequence_advantages(rewards: torch.Tensor, prompts_per_generation: i
 
 
 def generate_and_decode(model, tokenizer, prompts, max_new_tokens, disable_adapter=False, enable_thinking: bool = True, **gen_kwargs):
-    """Generates completions from a model and decodes them."""
+    """Generates completions from a model and decodes them.
+
+    Parameters
+    ----------
+    model : torch.nn.Module
+        The autoregressive language model used for generation.
+    tokenizer : Any
+        The tokenizer used to build chat prompts and decode outputs.
+    prompts : List[str]
+        User prompts to generate completions for.
+    max_new_tokens : int
+        Maximum number of new tokens to generate per sequence.
+    disable_adapter : bool, optional
+        If True, temporarily disables PEFT adapters during generation when supported.
+    enable_thinking : bool, optional
+        If True, enables the chat template's "thinking" mode when available.
+    **gen_kwargs : Any
+        Additional keyword arguments forwarded to `model.generate()`.
+
+    Returns
+    -------
+    Tuple[List[str], torch.Tensor, torch.Tensor]
+        - completions (List[str]): Decoded completions for each prompt with special
+          tokens removed. Length equals `len(prompts)`.
+        - generated_ids (torch.Tensor): Token IDs for the full sequences
+          (prompt + completion), left-padded to a common length. Shape:
+          `(batch_size, seq_len)`.
+        - loss_mask (torch.Tensor): A boolean mask that is `True` only for the
+          generated (completion) tokens.
+          Shape: `(batch_size, seq_len - 1)`.
+    """
     
     # Convert prompts to chat message format
     messages_list = [[{"role": "user", "content": p}] for p in prompts]
+    
+    # # Debug: Print prompts for debugging
+    # print("Debug: Prompts being processed:")
+    # for i, prompt in enumerate(prompts):
+    #     print(f"Prompt {i}: {prompt}")
+    # print()
     
     # Apply chat template with thinking mode control
     # This creates the full prompt string including special tokens
@@ -614,7 +634,7 @@ def generate_and_decode(model, tokenizer, prompts, max_new_tokens, disable_adapt
         tokenizer.apply_chat_template(
             messages,
             tokenize=False,
-            add_generation_prompt=True,
+            # add_generation_prompt=True,
             enable_thinking=enable_thinking
         ) for messages in messages_list
     ]
@@ -656,10 +676,10 @@ def generate_and_decode(model, tokenizer, prompts, max_new_tokens, disable_adapt
     print(tokenizer.batch_decode(generated_ids))
         
     # Extract, decode, and return completions using token-based slicing.
-    completions = _extract_completions(tokenizer, generated_ids, tokenized["input_ids"])
+    completions, loss_mask = _extract_completions_and_create_loss_mask(tokenizer, generated_ids, tokenized["input_ids"])
     
-    # Return text completions, full generated sequence, and tokenized prompts
-    return completions, generated_ids, tokenized["input_ids"]
+    # Return text completions, full generated sequence, and the loss mask
+    return completions, generated_ids, loss_mask
 
 
 def sample_and_revise(
@@ -744,7 +764,7 @@ The revised completion should be in the format: <think>chain-of-thought</think> 
         revision_prompts.append(revision_prompt)
     
     # Generate revised completions
-    revised_completions, revised_generated_ids, revised_tokenized_input_ids = generate_and_decode(
+    revised_completions, revised_generated_ids, loss_mask = generate_and_decode(
         revision_model,
         tokenizer,
         revision_prompts,
@@ -765,8 +785,7 @@ The revised completion should be in the format: <think>chain-of-thought</think> 
     advantages = compute_sequence_advantages(rewards, prompts_per_generation, rollouts_per_prompt)
     input_ids = revised_generated_ids
 
-    # Create a loss mask for the revised sequence
-    loss_mask = _create_loss_mask(revised_tokenized_input_ids, revised_generated_ids)
+    # The loss mask is now directly returned from generate_and_decode
     
     return input_ids, rewards, advantages, loss_mask, prompts, final_completions
 
@@ -821,18 +840,15 @@ def sample(model, tokenizer, rollouts_per_prompt: int = 4, prompts_per_generatio
     prompts = [problem["prompt"] for problem in problems]
 
     # Generate completions using the model
-    completions, generated_ids, tokenized_input_ids = generate_and_decode(model, tokenizer, prompts, max_new_tokens, enable_thinking=True)
+    completions, generated_ids, loss_mask = generate_and_decode(model, tokenizer, prompts, max_new_tokens, enable_thinking=True)
     
     # Create the batch from prompts and generated completions
     rewards = torch.tensor(math_reward_func(completions, prompts), dtype=torch.float32)
     advantages = compute_sequence_advantages(rewards, prompts_per_generation, rollouts_per_prompt)
-    
-    # Create a loss mask that is True for generated tokens and False for prompt tokens.
-    loss_mask = _create_loss_mask(tokenized_input_ids, generated_ids)
-
     input_ids = generated_ids
 
-    test_sample(input_ids, rewards, advantages, loss_mask, prompts, completions, rollouts_per_prompt, prompts_per_generation, tokenized_input_ids)
+    # test_sample(input_ids, rewards, advantages, loss_mask, prompts, completions, rollouts_per_prompt, prompts_per_generation, tokenized_input_ids)
+    debug_batch_and_actions(tokenizer, input_ids, loss_mask, context="Data Sampling")
 
     return input_ids, rewards, advantages, loss_mask, prompts, completions
 
@@ -856,7 +872,7 @@ def evaluate_model(model, tokenizer, eval_dataset, max_new_tokens=512, batch_siz
         batch_prompts = [sample["query"] for sample in batch_samples]
 
         # Use the unified generation path (with chat template) for consistency
-        completions, generated_ids, tokenized_input_ids = generate_and_decode(
+        completions, generated_ids, _ = generate_and_decode(
             model,
             tokenizer,
             batch_prompts,
@@ -864,8 +880,9 @@ def evaluate_model(model, tokenizer, eval_dataset, max_new_tokens=512, batch_siz
             enable_thinking=True,
         )
 
-        # Compute response lengths directly from token ids
-        prompt_lengths = (tokenized_input_ids != PAD_TOKEN_ID).sum(dim=1)
+        # Re-tokenize prompts to get prompt lengths for response length calculation
+        tokenized_input = tokenizer(batch_prompts, return_tensors="pt", padding=True, truncation=True)
+        prompt_lengths = (tokenized_input.input_ids != PAD_TOKEN_ID).sum(dim=1)
         batch_response_lengths = []
         for row_idx in range(generated_ids.size(0)):
             prompt_len = prompt_lengths[row_idx].item()
@@ -966,6 +983,8 @@ def main():
 
     # Load model & tokenizer (trust_remote_code required for Qwen series)
     tokenizer = AutoTokenizer.from_pretrained(args.model_name, trust_remote_code=True)
+
+    tokenizer.padding_side = "left"
 
     # Pad token for Qwen3-1.7B is <|endoftext|> = 151643
     # EOS token is <|im_end|> = 151645
