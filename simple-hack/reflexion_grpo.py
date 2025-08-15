@@ -1,6 +1,7 @@
 import argparse
 import math
 import random
+import time
 from typing import List, Dict, Any, Optional, Tuple
 import copy
 
@@ -94,9 +95,10 @@ class GRPOTrainer:
         attention_mask = (input_ids != PAD_TOKEN_ID).long()
         target_actions = input_ids[:, 1:]
 
-        if disable_adapter and hasattr(model, "disable_adapter"):
-            with model.disable_adapter():
-                outputs = model(input_ids, attention_mask=attention_mask)
+        # We must actually disable the adapter on self.model, ignoring the reference model.
+        if disable_adapter and hasattr(self.model, "disable_adapter"):
+            with self.model.disable_adapter():
+                outputs = self.model(input_ids, attention_mask=attention_mask)
         else:
             outputs = model(input_ids, attention_mask=attention_mask)
         
@@ -207,9 +209,9 @@ class GRPOTrainer:
         # Compute loss components
         pg_loss, clipped_fraction = self._pg_loss(new_logp, old_logp, advantages)
 
-        # Debug: Check if new_logp equals ref_logp
-        logp_equal = torch.allclose(new_logp, ref_logp, atol=1e-6)
-        print(f"new_logp equals ref_logp: {logp_equal}")
+        # # Debug: Check if new_logp equals ref_logp
+        # logp_equal = torch.allclose(new_logp, ref_logp, atol=1e-6)
+        # print(f"new_logp equals ref_logp: {logp_equal}")
 
         # Debug: Check if new_logp equals old_logp
         logp_equal = torch.allclose(new_logp, old_logp, atol=1e-6)
@@ -334,6 +336,7 @@ class GRPOTrainer:
             for micro_step in range(batch_size // prompts_per_generation):
                 # Sample a fresh batch for each accumulation step
                 if use_revision:
+                    sample_start_time = time.time()
                     batch = sample_and_revise(
                         model=self.model,
                         tokenizer=tokenizer,
@@ -344,8 +347,13 @@ class GRPOTrainer:
                         disable_adapter=False,
                         enable_thinking=False
                     )
+                    sample_time = time.time() - sample_start_time
+                    print(f"  sample_and_revise took {sample_time:.2f}s")
                 else:
+                    sample_start_time = time.time()
                     batch = sample(self.model, tokenizer, rollouts_per_prompt=rollouts_per_prompt, prompts_per_generation=prompts_per_generation, max_new_tokens=max_new_tokens)
+                    sample_time = time.time() - sample_start_time
+                    print(f"  sample took {sample_time:.2f}s")
                 
                 input_ids, rewards, advantages, loss_mask, _, _ = batch
 
@@ -406,6 +414,7 @@ class GRPOTrainer:
                         # )
 
                         # Compute loss for the micro-batch using the pre-computed old_logp
+                        compute_loss_start_time = time.time()
                         metrics = self.compute_loss(
                             input_ids=micro_batch_data['input_ids'],
                             loss_mask=micro_batch_data['loss_mask'],
@@ -414,6 +423,8 @@ class GRPOTrainer:
                             rollouts_per_prompt=rollouts_per_prompt,
                             is_first_step=is_first_gradient_step,
                         )
+                        compute_loss_time = time.time() - compute_loss_start_time
+                        print(f"    compute_loss took {compute_loss_time:.3f}s")
                         loss = metrics['loss']
                         
                         # Accumulate gradients
