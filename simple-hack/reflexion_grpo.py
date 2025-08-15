@@ -139,7 +139,7 @@ class GRPOTrainer:
         log_ratio_ref = ref_logp - new_logp
         ratio_ref = torch.exp(log_ratio_ref)
         kl_losses = ratio_ref - log_ratio_ref - 1
-        return kl_losses.sum()
+        return kl_losses
 
     def compute_loss(
         self,
@@ -168,6 +168,9 @@ class GRPOTrainer:
         # print(f"  loss_mask: {loss_mask.shape}")
         # print(f"  old_logp_full: {old_logp_full.shape}")
         # print(f"  advantages_per_sequence: {advantages_per_sequence.shape}")
+
+        # Debug: Print advantages
+        print(f"advantages_per_sequence: {advantages_per_sequence}")
 
         input_ids = input_ids.to(self.device)
         loss_mask = loss_mask.to(self.device)
@@ -204,6 +207,10 @@ class GRPOTrainer:
         # Compute loss components
         pg_loss, clipped_fraction = self._pg_loss(new_logp, old_logp, advantages)
 
+        # Debug: Check if new_logp equals ref_logp
+        logp_equal = torch.allclose(new_logp, ref_logp, atol=1e-6)
+        print(f"new_logp equals ref_logp: {logp_equal}")
+
         # Debug: Check if new_logp equals old_logp
         logp_equal = torch.allclose(new_logp, old_logp, atol=1e-6)
         print(f"new_logp equals old_logp: {logp_equal}")
@@ -215,14 +222,14 @@ class GRPOTrainer:
             print(f"new_logp: {new_logp}")
 
         kl_loss = self._kl_loss(new_logp, ref_logp)
-        loss = (pg_loss + self.kl_coef * kl_loss) / SEQUENCE_LENGTH_NORMALIZATION / float(rollouts_per_prompt)
+        loss = (pg_loss + self.kl_coef * kl_loss.sum()) / SEQUENCE_LENGTH_NORMALIZATION / float(rollouts_per_prompt)
 
         avg_response_length = loss_mask.sum().item() / loss_mask.shape[0]
 
         return {
             "loss": loss,
             "pg_loss": pg_loss.item(),
-            "kl_loss": kl_loss.item() / SEQUENCE_LENGTH_NORMALIZATION / float(rollouts_per_prompt),
+            "kl_loss": kl_loss.mean().item(),
             "clipped_fraction": clipped_fraction,
             "avg_response_length": avg_response_length,
             "model_entropy": mean_entropy,
