@@ -203,7 +203,7 @@ class GRPOTrainer:
 
         # Calculate model entropy over the generated tokens for logging
         with torch.no_grad():
-            estimated_entropy = -new_logp
+            estimated_entropy = -new_logp.detach()
             mean_entropy = estimated_entropy.mean().item()
 
         # Compute loss components
@@ -213,15 +213,15 @@ class GRPOTrainer:
         # logp_equal = torch.allclose(new_logp, ref_logp, atol=1e-6)
         # print(f"new_logp equals ref_logp: {logp_equal}")
 
-        # Debug: Check if new_logp equals old_logp
-        logp_equal = torch.allclose(new_logp, old_logp, atol=1e-6)
-        print(f"new_logp equals old_logp: {logp_equal}")
+        # # Debug: Check if new_logp equals old_logp
+        # logp_equal = torch.allclose(new_logp, old_logp, atol=1e-6)
+        # print(f"new_logp equals old_logp: {logp_equal}")
         
-        # If this is the first step and logp tensors don't agree, print them
-        if is_first_step and not logp_equal:
-            print(f"First step - old_logp and new_logp do not agree:")
-            print(f"old_logp: {old_logp}")
-            print(f"new_logp: {new_logp}")
+        # # If this is the first step and logp tensors don't agree, print them
+        # if is_first_step and not logp_equal:
+        #     print(f"First step - old_logp and new_logp do not agree:")
+        #     print(f"old_logp: {old_logp}")
+        #     print(f"new_logp: {new_logp}")
 
         kl_loss = self._kl_loss(new_logp, ref_logp)
         loss = (pg_loss + self.kl_coef * kl_loss.sum()) / SEQUENCE_LENGTH_NORMALIZATION / float(rollouts_per_prompt)
@@ -372,7 +372,7 @@ class GRPOTrainer:
                         'rewards': rewards_chunks[i],
                         'advantages': advantages_chunks[i],
                         'loss_mask': loss_mask_chunks[i],
-                        'old_logp_full': chunk_logp
+                        'old_logp_full': chunk_logp.detach()
                     })
                 
                 # Track and log rewards from this collection micro-batch
@@ -383,6 +383,10 @@ class GRPOTrainer:
                 step_success_rates.append((rewards > 0).float().mean().item())
                 print(f"  Collected micro-batch {micro_step+1}/{batch_size // prompts_per_generation} | reward: {batch_reward_mean:.3f}")
             
+            # Clear GPU cache after all experience collection is complete
+            print("Clearing GPU cache after experience collection...")
+            torch.cuda.empty_cache()
+
             # --- 2. Optimization Phase ---
             self.model.train()
             kl_exceeded = False
