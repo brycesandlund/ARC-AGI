@@ -334,47 +334,22 @@ class GRPOTrainer:
                 
                 input_ids, rewards, advantages, loss_mask, _, _ = batch
 
-                with torch.no_grad():
-                    old_logp_full = self._compute_log_probs(self.model, input_ids)
-                
-                # Compute old_logp_full chunk by chunk to match training computation
+                # Split tensors
                 input_ids_chunks = torch.split(input_ids, rollouts_per_prompt)
-                old_logp_full_chunks = []
-
-                for chunk in input_ids_chunks:
-                    with torch.no_grad():
-                        chunk_logp = self._compute_log_probs(self.model, chunk)
-                    old_logp_full_chunks.append(chunk_logp)
-
-                # Split the other tensors normally
                 rewards_chunks = torch.split(rewards, rollouts_per_prompt)
                 advantages_chunks = torch.split(advantages, rollouts_per_prompt)
                 loss_mask_chunks = torch.split(loss_mask, rollouts_per_prompt)
 
-                # Debug: Test if chunking changes the computation
                 for i in range(prompts_per_generation):
-                    chunk_input_ids = input_ids_chunks[i]
-                    chunk_old_logp = old_logp_full_chunks[i]
-                    
-                    # Recompute logp for this chunk to see if it matches the chunked version
                     with torch.no_grad():
-                        recomputed_logp = self._compute_log_probs(self.model, chunk_input_ids)
-                    
-                    print(f"Chunk {i} - Batch vs recomputed chunk:")
-                    print(f"  Shapes match: {chunk_old_logp.shape == recomputed_logp.shape}")
-                    print(f"  Values match: {torch.allclose(chunk_old_logp, recomputed_logp, atol=1e-6)}")
-                    if not torch.allclose(chunk_old_logp, recomputed_logp, atol=1e-6):
-                        print(f"  Max diff: {(chunk_old_logp - recomputed_logp).abs().max().item()}")
-                        print(f"  First few diffs: {(chunk_old_logp - recomputed_logp).flatten()[:10]}")
-                        break  # Only show the first mismatch
+                        chunk_logp = self._compute_log_probs(self.model, input_ids_chunks[i])
 
-                for i in range(prompts_per_generation):
                     experience_buffer.append({
                         'input_ids': input_ids_chunks[i], 
                         'rewards': rewards_chunks[i],
                         'advantages': advantages_chunks[i],
                         'loss_mask': loss_mask_chunks[i],
-                        'old_logp_full': old_logp_full_chunks[i]
+                        'old_logp_full': chunk_logp
                     })
                 
                 # Track and log rewards from this collection micro-batch
