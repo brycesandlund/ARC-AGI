@@ -1039,6 +1039,12 @@ def main():
 
     print(f"Tokenizer pad token: '{tokenizer.pad_token}' (ID: {tokenizer.pad_token_id})")
     print(f"Tokenizer EOS token: '{tokenizer.eos_token}' (ID: {tokenizer.eos_token_id})")
+
+    print(f"CUDA available: {torch.cuda.is_available()}")
+    if torch.cuda.is_available():
+        print(f"CUDA device count: {torch.cuda.device_count()}")
+        print(f"Current CUDA device: {torch.cuda.current_device()}")
+        print(f"CUDA device name: {torch.cuda.get_device_name()}")
     
     config = AutoConfig.from_pretrained(args.model_name, trust_remote_code=True)
     base_model = AutoModelForCausalLM.from_pretrained(
