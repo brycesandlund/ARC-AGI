@@ -125,10 +125,10 @@ class GRPOTrainer:
             clipped_mask = (ratio < 1.0 - self.clip_ratio) | (ratio > 1.0 + self.clip_ratio)
             clipped_fraction = clipped_mask.float().mean().item()
             
-            return pg_losses.mean(), clipped_fraction
+            return pg_losses.sum(), clipped_fraction
         else:
             unclipped_losses = -(ratio * advantages)
-            return unclipped_losses.mean(), clipped_fraction
+            return unclipped_losses.sum(), clipped_fraction
 
     def _kl_loss(
         self,
@@ -139,7 +139,7 @@ class GRPOTrainer:
         log_ratio_ref = ref_logp - new_logp
         ratio_ref = torch.exp(log_ratio_ref)
         kl_losses = ratio_ref - log_ratio_ref - 1
-        return kl_losses.mean()
+        return kl_losses.sum()
 
     def compute_loss(
         self,
@@ -161,6 +161,14 @@ class GRPOTrainer:
         advantages_per_sequence : (B,) single scalar advantage per sequence
         rollouts_per_prompt : number of rollouts to normalize loss by
         """
+
+        # # Debug: Print shapes of input tensors
+        # print(f"Debug - Input tensor shapes:")
+        # print(f"  input_ids: {input_ids.shape}")
+        # print(f"  loss_mask: {loss_mask.shape}")
+        # print(f"  old_logp_full: {old_logp_full.shape}")
+        # print(f"  advantages_per_sequence: {advantages_per_sequence.shape}")
+
         input_ids = input_ids.to(self.device)
         loss_mask = loss_mask.to(self.device)
 
@@ -214,7 +222,7 @@ class GRPOTrainer:
         return {
             "loss": loss,
             "pg_loss": pg_loss.item(),
-            "kl_loss": kl_loss.item(),
+            "kl_loss": kl_loss.item() / SEQUENCE_LENGTH_NORMALIZATION / float(rollouts_per_prompt),
             "clipped_fraction": clipped_fraction,
             "avg_response_length": avg_response_length,
             "model_entropy": mean_entropy,
@@ -668,10 +676,10 @@ def generate_and_decode(model, tokenizer, prompts, max_new_tokens, disable_adapt
         "input_ids": tokenized["input_ids"].to(model.device),
         "attention_mask": tokenized["attention_mask"].to(model.device),
         "max_new_tokens": max_new_tokens,
-        # "temperature": 0.7,
+        "temperature": 0.6,
         "do_sample": True,
         "pad_token_id": PAD_TOKEN_ID,
-        # "repetition_penalty": 1.1,
+        "repetition_penalty": 1.1,
     }
     # Update with any additional kwargs
     base_gen_kwargs.update(gen_kwargs)
