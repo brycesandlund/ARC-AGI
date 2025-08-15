@@ -89,8 +89,6 @@ class GRPOTrainer:
         Returns:
             A tensor of log probabilities of shape (batch_size, sequence_length - 1).
         """
-        was_training = model.training
-        model.eval()
         input_ids = input_ids.to(self.device)
         attention_mask = (input_ids != PAD_TOKEN_ID).long()
         target_actions = input_ids[:, 1:]
@@ -98,14 +96,14 @@ class GRPOTrainer:
         # We must actually disable the adapter on self.model, ignoring the reference model.
         if disable_adapter and hasattr(self.model, "disable_adapter"):
             with self.model.disable_adapter():
+                self._disable_dropout(self.model)
                 outputs = self.model(input_ids, attention_mask=attention_mask)
         else:
+            self._disable_dropout(self.model)
             outputs = model(input_ids, attention_mask=attention_mask)
         
         logits = outputs.logits[:, :-1, :]
         log_probs = F.log_softmax(logits, dim=-1)
-        if was_training:
-            model.train()
         return log_probs.gather(-1, target_actions.unsqueeze(-1)).squeeze(-1)
 
     def _pg_loss(
@@ -142,6 +140,12 @@ class GRPOTrainer:
         ratio_ref = torch.exp(log_ratio_ref)
         kl_losses = ratio_ref - log_ratio_ref - 1
         return kl_losses
+
+    def _disable_dropout(self, model):
+        """Sets all dropout layers to eval mode for the given model."""
+        for m in model.modules():
+            if isinstance(m, torch.nn.Dropout):
+                m.eval()
 
     def compute_loss(
         self,
@@ -368,11 +372,11 @@ class GRPOTrainer:
                         chunk_logp = self._compute_log_probs(self.model, input_ids_chunks[i])
 
                     experience_buffer.append({
-                        'input_ids': input_ids_chunks[i], 
-                        'rewards': rewards_chunks[i],
-                        'advantages': advantages_chunks[i],
-                        'loss_mask': loss_mask_chunks[i],
-                        'old_logp_full': chunk_logp.detach()
+                        'input_ids': input_ids_chunks[i].to('cpu'), 
+                        'rewards': rewards_chunks[i].to('cpu'),
+                        'advantages': advantages_chunks[i].to('cpu'),
+                        'loss_mask': loss_mask_chunks[i].to('cpu'),
+                        'old_logp_full': chunk_logp.detach().to('cpu')
                     })
                 
                 # Track and log rewards from this collection micro-batch
