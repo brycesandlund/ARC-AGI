@@ -573,7 +573,7 @@ def generate_with_cache(model, **kwargs):
     model.config.use_cache = True
 
     # Generate
-    with torch.no_grad():
+    with torch.inference_mode():
         generated_ids = model.generate(**kwargs)
 
     # Restore original states
@@ -1078,12 +1078,36 @@ def main():
         print(f"CUDA device name: {torch.cuda.get_device_name()}")
     
     config = AutoConfig.from_pretrained(args.model_name, trust_remote_code=True)
-    base_model = AutoModelForCausalLM.from_pretrained(
-        args.model_name,
-        config=config,
-        torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
-        trust_remote_code=True,
-    )
+
+    # Prefer FlashAttention-2 on capable GPUs (e.g., H100). Fallback to SDPA or omit
+    # if the model class does not accept the kwarg.
+    attn_impl_kwargs = {}
+    try:
+        import flash_attn  # type: ignore
+        attn_impl_kwargs["attn_implementation"] = "flash_attention_2"
+        print("Attention backend: flash_attention_2")
+    except Exception as e:
+        # If flash-attn is unavailable, prefer SDPA flash kernels when supported
+        attn_impl_kwargs["attn_implementation"] = "sdpa"
+        print(f"flash-attn not available; using SDPA. Details: {e}")
+
+    try:
+        base_model = AutoModelForCausalLM.from_pretrained(
+            args.model_name,
+            config=config,
+            torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
+            trust_remote_code=True,
+            **attn_impl_kwargs,
+        )
+    except TypeError:
+        # Some custom model classes may not accept attn_implementation
+        print("Model class does not accept 'attn_implementation'; loading without it.")
+        base_model = AutoModelForCausalLM.from_pretrained(
+            args.model_name,
+            config=config,
+            torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
+            trust_remote_code=True,
+        )
 
     # Enable gradient checkpointing for memory efficiency
     if args.gradient_checkpointing:
