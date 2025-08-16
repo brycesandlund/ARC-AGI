@@ -176,7 +176,7 @@ class GRPOTrainer:
         # print(f"  advantages_per_sequence: {advantages_per_sequence.shape}")
 
         # Debug: Print advantages
-        print(f"advantages_per_sequence: {advantages_per_sequence}")
+        # print(f"advantages_per_sequence: {advantages_per_sequence}")
 
         input_ids = input_ids.to(self.device)
         loss_mask = loss_mask.to(self.device)
@@ -330,6 +330,7 @@ class GRPOTrainer:
         for collection_step in range(1, collection_steps + 1):
             
             # --- 1. Data Collection Phase ---
+            collection_start_time = time.time()
             experience_buffer = []
             step_rewards_mean = []
             step_rewards_max = []
@@ -391,7 +392,13 @@ class GRPOTrainer:
             print("Clearing GPU cache after experience collection...")
             torch.cuda.empty_cache()
 
+            collection_time = time.time() - collection_start_time
+            print(f"Data collection for step {collection_step} took {collection_time:.2f}s")
+            if use_wandb:
+                wandb.log({"train/data_collection_time": collection_time, "collection_step": collection_step})
+
             # --- 2. Optimization Phase ---
+            optimization_start_time = time.time()
             self.model.train()
             kl_exceeded = False
             is_first_gradient_step = True
@@ -432,7 +439,7 @@ class GRPOTrainer:
                             is_first_step=is_first_gradient_step,
                         )
                         compute_loss_time = time.time() - compute_loss_start_time
-                        print(f"    compute_loss took {compute_loss_time:.3f}s")
+                        print(f"    compute_loss took {compute_loss_time:.3f}s, advantages non-zero: {torch.any(micro_batch_data['advantages'] != 0).item()}")
                         loss = metrics['loss']
                         
                         # Accumulate gradients
@@ -526,6 +533,11 @@ class GRPOTrainer:
                 
                 if kl_exceeded:
                     break
+
+            optimization_time = time.time() - optimization_start_time
+            print(f"Optimization for step {collection_step} took {optimization_time:.2f}s")
+            if use_wandb:
+                wandb.log({"train/optimization_time": optimization_time, "collection_step": collection_step})
 
         # Final evaluation if eval dataset provided
         if eval_dataset is not None:
