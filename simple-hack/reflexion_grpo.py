@@ -417,6 +417,7 @@ class GRPOTrainer:
                     minibatch_clipped_fractions = []
                     minibatch_response_lengths = []
                     minibatch_entropies = []
+                    non_zero_advantages_count = 0
 
                     # Iterate over the collected experience in the minibatch
                     for micro_batch_data in minibatch:
@@ -440,6 +441,11 @@ class GRPOTrainer:
                         )
                         compute_loss_time = time.time() - compute_loss_start_time
                         print(f"    compute_loss took {compute_loss_time:.3f}s, advantages non-zero: {torch.any(micro_batch_data['advantages'] != 0).item()}")
+                        
+                        # Track advantages for logging
+                        if torch.any(micro_batch_data['advantages'] != 0):
+                            non_zero_advantages_count += 1
+
                         loss = metrics['loss']
                         
                         # Accumulate gradients
@@ -495,6 +501,8 @@ class GRPOTrainer:
                     avg_reward_std = minibatch_rewards.std().item()
                     avg_success_rate = (minibatch_rewards > 0).float().mean().item()
                     
+                    fraction_non_zero_advantages = non_zero_advantages_count / len(minibatch) if minibatch else 0.0
+
                     if use_wandb:
                         wandb.log({
                             "train/loss": avg_loss,
@@ -509,6 +517,7 @@ class GRPOTrainer:
                             "train/batch_success_rate": avg_success_rate,
                             "train/model_entropy": avg_entropy,
                             "train/grad_norm": grad_norm,
+                            "train/fraction_non_zero_advantages": fraction_non_zero_advantages,
                             "step": total_optim_steps,
                             "collection_step": collection_step,
                             "epoch_per_batch": epoch + 1,
