@@ -471,9 +471,6 @@ class GRPOTrainer:
                         print(f"  KL divergence {avg_kl:.4f} exceeds threshold {kl_threshold}. Abandoning optimization for this batch.")
                         kl_exceeded = True
                         break
-
-                    # Clip gradients and perform optimizer step after accumulating over the whole minibatch
-                    total_optim_steps += 1
                     
                     if save_steps > 0 and total_optim_steps % save_steps == 0 and repo_id:
                         if hasattr(self.model, "push_to_hub"):
@@ -491,6 +488,9 @@ class GRPOTrainer:
                                 print("You may also need to create the repository on the Hub first.")
                         else:
                             print("Warning: Model does not have `push_to_hub` method. Skipping checkpoint.")
+                    
+                    # Clip gradients and perform optimizer step after accumulating over the whole minibatch
+                    total_optim_steps += 1
                     
                     # Gradient Norm Calculation and Clipping. clip_grad_norm_ returns the total norm of
                     # all parameters (viewed as a single vector) before clipping.
