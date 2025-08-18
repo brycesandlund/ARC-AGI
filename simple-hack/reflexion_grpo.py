@@ -9,7 +9,7 @@ import torch
 from torch.nn import functional as F
 from torch.optim.lr_scheduler import LinearLR
 from transformers import AutoTokenizer, AutoModelForCausalLM, AutoConfig
-from peft import LoraConfig, get_peft_model
+from peft import LoraConfig, get_peft_model, PeftModel
 import wandb
 
 from datasets import Dataset
@@ -1049,6 +1049,8 @@ def main():
     parser.add_argument("--lora_r", type=int, default=16, help="LoRA rank")
     parser.add_argument("--lora_alpha", type=int, default=32, help="LoRA alpha scaling parameter")
     parser.add_argument("--lora_dropout", type=float, default=0.0, help="LoRA dropout")
+    parser.add_argument("--lora_weights_name", type=str, default=None, help="HuggingFace repository ID for LoRA weights to load and continue training.")
+    parser.add_argument("--lora_revision", type=str, default="main", help="Git revision (branch, tag, or commit hash) of the LoRA weights to load.")
     
     # Memory optimization
     parser.add_argument("--gradient_checkpointing", action="store_true", default=True, help="Enable gradient checkpointing to save memory")
@@ -1152,16 +1154,27 @@ def main():
 
     # Apply LoRA by default (unless disabled)
     if args.use_lora:
-        print("Applying LoRA for parameter-efficient fine-tuning...")
-        lora_config = LoraConfig(
-            r=args.lora_r,
-            lora_alpha=args.lora_alpha,
-            target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
-            lora_dropout=args.lora_dropout,
-            bias="none",
-            task_type="CAUSAL_LM"
-        )
-        model = get_peft_model(base_model, lora_config)
+        if args.lora_weights_name:
+            print(f"Loading LoRA adapters from {args.lora_weights_name} (revision: {args.lora_revision})...")
+            model = PeftModel.from_pretrained(
+                base_model, 
+                args.lora_weights_name, 
+                is_trainable=True,
+                revision=args.lora_revision,
+            )
+            print("LoRA adapters loaded.")
+        else:
+            print("Applying new LoRA for parameter-efficient fine-tuning...")
+            lora_config = LoraConfig(
+                r=args.lora_r,
+                lora_alpha=args.lora_alpha,
+                target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+                lora_dropout=args.lora_dropout,
+                bias="none",
+                task_type="CAUSAL_LM"
+            )
+            model = get_peft_model(base_model, lora_config)
+        
         model.print_trainable_parameters()
         # With LoRA, the reference model is the frozen base model
         ref_model = base_model
