@@ -296,6 +296,8 @@ class GRPOTrainer:
         kl_threshold: float = 0.02,
         use_revision: bool = False,
         minibatch_size: int = 1,
+        save_steps: int = 0,
+        repo_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Train the model using GRPO.
         
@@ -312,6 +314,8 @@ class GRPOTrainer:
         kl_threshold : KL divergence threshold for early stopping
         use_revision : whether to use revision model for sampling
         minibatch_size : size of minibatches for optimization
+        save_steps : number of optimization steps between saving LoRA checkpoints
+        repo_id : Hugging Face Hub repository ID to push checkpoints to.
         
         Returns
         -------
@@ -470,6 +474,23 @@ class GRPOTrainer:
 
                     # Clip gradients and perform optimizer step after accumulating over the whole minibatch
                     total_optim_steps += 1
+                    
+                    if save_steps > 0 and total_optim_steps % save_steps == 0 and repo_id:
+                        if hasattr(self.model, "push_to_hub"):
+                            branch_name = f"step-{total_optim_steps}"
+                            try:
+                                self.model.push_to_hub(
+                                    repo_id, 
+                                    commit_message=f"Checkpoint at step {total_optim_steps}",
+                                    revision=branch_name,
+                                )
+                                print(f"Pushed LoRA checkpoint to Hugging Face Hub repository {repo_id} on branch {branch_name} at step {total_optim_steps}")
+                            except Exception as e:
+                                print(f"Failed to push to Hub: {e}")
+                                print("Please ensure you are logged in to Hugging Face Hub via `huggingface-cli login` or by setting the HUGGING_FACE_HUB_TOKEN environment variable.")
+                                print("You may also need to create the repository on the Hub first.")
+                        else:
+                            print("Warning: Model does not have `push_to_hub` method. Skipping checkpoint.")
                     
                     # Gradient Norm Calculation and Clipping. clip_grad_norm_ returns the total norm of
                     # all parameters (viewed as a single vector) before clipping.
@@ -1050,6 +1071,7 @@ def main():
     
     # Gradient clipping configuration
     parser.add_argument("--grad_clip_norm", type=float, default=1.0, help="Gradient clipping norm. Set to 0 or negative to disable clipping")
+    parser.add_argument("--save_steps", type=int, default=100, help="Number of optimization steps between saving LoRA checkpoints to Hugging Face Hub.")
 
     args = parser.parse_args()
 
@@ -1060,6 +1082,10 @@ def main():
             name=args.wandb_run_name,
             config=vars(args)  # Log all hyperparameters
         )
+    
+    run_id = wandb.run.id if args.use_wandb and wandb.run else f"local-{int(time.time())}"
+    model_name_safe = args.model_name.split("/")[-1].replace('.', '_')
+    repo_id = f"bcsandlund/{model_name_safe}-grpo-math-lora-{run_id}"
 
     # Load model & tokenizer (trust_remote_code required for Qwen series)
     tokenizer = AutoTokenizer.from_pretrained(args.model_name, trust_remote_code=True)
@@ -1203,17 +1229,27 @@ def main():
         kl_threshold=args.kl_threshold,
         use_revision=args.use_revision,
         minibatch_size=args.minibatch_size,
+        save_steps=args.save_steps,
+        repo_id=repo_id if args.use_lora else None,
     )
 
     print("Training complete!")
     
-    # Save model (LoRA adapters if using LoRA, full model otherwise)
-    if args.use_lora:
-        print("Saving LoRA adapters...")
-        model.save_pretrained(f"./lora_adapters_grpo_math")
-        print(f"LoRA adapters saved to ./lora_adapters_grpo_math")
-    else:
-        print("To save full model, use: model.save_pretrained('./saved_model')")
+    # # Save model (LoRA adapters if using LoRA, full model otherwise)
+    # if args.use_lora:
+    #     print("Saving final LoRA adapters locally...")
+    #     save_directory = f"./lora_adapters_grpo_math-{run_id}"
+    #     model.save_pretrained(save_directory)
+    #     print(f"LoRA adapters saved to {save_directory}")
+
+    #     print(f"Pushing final LoRA adapters to Hugging Face Hub: {repo_id}")
+    #     try:
+    #         model.push_to_hub(repo_id, commit_message="Final model checkpoint")
+    #         print(f"Successfully pushed to main branch of {repo_id}")
+    #     except Exception as e:
+    #         print(f"Failed to push final model to Hub: {e}")
+    # else:
+    #     print("To save full model, use: model.save_pretrained('./saved_model')")
     
     if args.use_wandb:
         wandb.finish()
