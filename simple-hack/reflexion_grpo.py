@@ -428,7 +428,7 @@ class GRPOTrainer:
                 random.shuffle(experience_buffer)  # Shuffle experience for each epoch
                 
                 # Process in minibatches
-                for i in range(0, len(experience_buffer), minibatch_size):
+                for i in range(0, batch_size, minibatch_size):
                     minibatch = experience_buffer[i:i+minibatch_size]   # Note: i+minibatch_size may exceed len(experience_buffer)
                     
                     self.optimizer.zero_grad()
@@ -557,7 +557,7 @@ class GRPOTrainer:
                         })
                     
                     minibatch_num = i // minibatch_size + 1
-                    total_minibatches = math.ceil(len(experience_buffer) / minibatch_size)
+                    total_minibatches = math.ceil(batch_size / minibatch_size)
                     
                     print(
                         f"Optim Step {total_optim_steps:05d} | Collection Step {collection_step}/{collection_steps}, Epoch {epoch+1}/{epochs_per_batch}, MiniBatch {minibatch_num}/{total_minibatches} | "
@@ -570,8 +570,8 @@ class GRPOTrainer:
                         f"reward_std: {avg_reward_std:.3f} | "
                         f"grad_norm: {grad_norm:.4f} | "
                         f"success: {avg_success_rate:.1%} | "
-                        f"zeros: {fraction_all_zero_rewards:.3f} | "
-                        f"ones: {fraction_all_one_rewards:.3f} | "
+                        f"zeros: {all_zero_rewards_count}/{prompts_processed_count} | "
+                        f"ones: {all_one_rewards_count}/{prompts_processed_count} | "
                         f"entropy: {avg_entropy:.4f}"
                     )
                 
