@@ -278,7 +278,7 @@ class GRPOTrainer:
                 f"{eval_type}_eval/reward_std": metrics.get("eval_reward_std", 0),
                 f"{eval_type}_eval/avg_response_length": metrics.get("eval_avg_response_length", 0),
                 "episode": episode
-            })
+            }, step=episode)
         
         return metrics
 
@@ -422,7 +422,7 @@ class GRPOTrainer:
             collection_time = time.time() - collection_start_time
             print(f"Data collection for step {collection_step} took {collection_time:.2f}s")
             if use_wandb:
-                wandb.log({"train/data_collection_time": collection_time, "collection_step": collection_step})
+                wandb.log({"train/data_collection_time": collection_time, "collection_step": collection_step}, step=total_optim_steps)
 
             # --- 2. Optimization Phase ---
             optimization_start_time = time.time()
@@ -562,10 +562,9 @@ class GRPOTrainer:
                             "train/grad_norm": grad_norm,
                             "train/fraction_all_zero_rewards": fraction_all_zero_rewards,
                             "train/fraction_all_one_rewards": fraction_all_one_rewards,
-                            "step": total_optim_steps,
                             "collection_step": collection_step,
                             "epoch_per_batch": epoch + 1,
-                        })
+                        }, step=total_optim_steps)
                     
                     minibatch_num = i // minibatch_size + 1
                     total_minibatches = math.ceil(batch_size / minibatch_size)
@@ -592,7 +591,7 @@ class GRPOTrainer:
             optimization_time = time.time() - optimization_start_time
             print(f"Optimization for step {collection_step} took {optimization_time:.2f}s")
             if use_wandb:
-                wandb.log({"train/optimization_time": optimization_time, "collection_step": collection_step})
+                wandb.log({"train/optimization_time": optimization_time, "collection_step": collection_step}, step=total_optim_steps)
 
         # Final evaluation if eval dataset provided
         if eval_dataset is not None:
