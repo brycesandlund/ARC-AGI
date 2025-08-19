@@ -3,6 +3,8 @@ from datasets import Dataset
 import random
 import re
 
+LOG_FREQUENCY = 0.02 # Print logs every 20 calls on average
+
 def parse_completion(completion: str) -> tuple[str, str]:
     """
     Parses a completion string that may contain <think>...</think> blocks.
@@ -360,15 +362,16 @@ def math_reward_func(completions, prompts, **kwargs):
         if '<think>' in completion and '</think>' not in completion:
             reward = 0.0
             
-        print("\n-----")
-        print(f"Prompt: {prompt}")
-        print(f"Completion: {completion}")
-        print(f"Parsed Content: {content}")
-        print(f"Prompt Numbers: {extract_numbers_from_prompt(prompt) if target_match else 'N/A'}")
-        print(f"Expression Numbers: {extract_numbers_from_expression(content) if target_match else 'N/A'}")
-        print(f"Numbers Match: {numbers_match(extract_numbers_from_prompt(prompt), extract_numbers_from_expression(content)) if target_match else 'N/A'}")
-        print(f"Reward: {reward}")
-        print("-----")
+        if random.random() < LOG_FREQUENCY:
+            print("\n-----")
+            print(f"Prompt: {prompt}")
+            print(f"Completion: {completion}")
+            print(f"Parsed Content: {content}")
+            print(f"Prompt Numbers: {extract_numbers_from_prompt(prompt) if target_match else 'N/A'}")
+            print(f"Expression Numbers: {extract_numbers_from_expression(content) if target_match else 'N/A'}")
+            print(f"Numbers Match: {numbers_match(extract_numbers_from_prompt(prompt), extract_numbers_from_expression(content)) if target_match else 'N/A'}")
+            print(f"Reward: {reward}")
+            print("-----")
             
         rewards.append(reward)
     
