@@ -1047,7 +1047,10 @@ def evaluate_model(model, tokenizer, eval_dataset, max_new_tokens=512, batch_siz
 
 
 def main():
+    print()
     print("Log into Hugging Face to save model checkpoints!!!!!!!!!!!!")
+    print()
+    print()
     
     # Set print options to print full tensors
     torch.set_printoptions(threshold=10_000, linewidth=200)
