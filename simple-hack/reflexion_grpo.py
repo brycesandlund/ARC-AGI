@@ -173,6 +173,60 @@ class GRPOTrainer:
         kl_losses = ratio_ref - log_ratio_ref - 1
         return kl_losses
 
+    def _combine_experiences(self, experiences: List[Dict[str, torch.Tensor]]) -> Dict[str, torch.Tensor]:
+        """Combines a list of experiences into a single batch for loss computation.
+
+        Pads `input_ids` and `loss_mask` tensors to the maximum
+        sequence length in the list of experiences. `rewards` and `advantages` are
+        simply concatenated.
+
+        Args:
+            experiences: A list of experience dictionaries. Each dictionary corresponds
+                         to one prompt and contains tensors for `rollouts_per_prompt` sequences.
+
+        Returns:
+            A single dictionary containing the combined and padded tensors, ready for
+            `compute_loss`.
+        """
+        if not experiences:
+            return {}
+
+        # Find the maximum sequence length in the batch of experiences
+        max_len = max(exp['input_ids'].shape[1] for exp in experiences)
+
+        padded_input_ids = []
+        padded_loss_masks = []
+        all_rewards = []
+        all_advantages = []
+
+        for exp in experiences:
+            input_ids = exp['input_ids']
+            loss_mask = exp['loss_mask']
+            
+            # Amount of padding needed for this experience's tensors
+            padding_len = max_len - input_ids.shape[1]
+
+            # Pad 'input_ids' to max_len on the right (sequence dimension)
+            padded_ids = F.pad(input_ids, (0, padding_len), 'constant', PAD_TOKEN_ID)
+            padded_input_ids.append(padded_ids)
+
+            # Pad 'loss_mask' to match the new tensor dimensions.
+            # The mask is shorter by 1 in the sequence dimension.
+            padded_mask = F.pad(loss_mask, (0, padding_len), 'constant', False)
+            padded_loss_masks.append(padded_mask)
+
+            # These tensors do not have a sequence length dimension to pad, so just append
+            all_rewards.append(exp['rewards'])
+            all_advantages.append(exp['advantages'])
+
+        # Concatenate all tensors along the batch dimension (dim=0)
+        return {
+            'input_ids': torch.cat(padded_input_ids, dim=0),
+            'loss_mask': torch.cat(padded_loss_masks, dim=0),
+            'rewards': torch.cat(all_rewards, dim=0),
+            'advantages': torch.cat(all_advantages, dim=0),
+        }
+
     def _disable_dropout(self, model):
         """Sets all dropout layers to eval mode for the given model."""
         for m in model.modules():
@@ -323,6 +377,7 @@ class GRPOTrainer:
         rollouts_per_prompt: int,
         prompts_per_generation: int,
         max_new_tokens: int,
+        prompts_per_compute_loss: int = 1,
         eval_dataset: Optional[Any] = None,
         use_wandb: bool = False,
         kl_threshold: float = 0.02,
@@ -437,14 +492,21 @@ class GRPOTrainer:
                 micro_step += 1
 
             leftover_experience = experience_buffer[batch_size:]
-            print(f"Saving {len(leftover_experience)} trajectories for next collection step...")
+            print(f"Saving {len(leftover_experience)} prompts for next collection step...")
+            experience_buffer = experience_buffer[:batch_size]
             
+            processed_buffer = []
 
             # Calculate old_logp_full for all trajectories we will optimize
-            for experience in experience_buffer:
+            for i in range(0, len(experience_buffer), prompts_per_compute_loss):
+                sublist = experience_buffer[i:i+prompts_per_compute_loss]
+                combined_experience = self._combine_experiences(sublist)
+                
                 with torch.no_grad():
-                    old_logp_full = self._compute_log_probs(self.model, experience['input_ids'])
-                    experience['old_logp_full'] = old_logp_full.detach().to('cpu')
+                    old_logp_full = self._compute_log_probs(self.model, combined_experience['input_ids'])
+                    combined_experience['old_logp_full'] = old_logp_full.detach().to('cpu')
+                
+                processed_buffer.append(combined_experience)
 
 
             # Clear GPU cache after all experience collection is complete
@@ -465,13 +527,17 @@ class GRPOTrainer:
             # Calculate reward distribution fractions
             fraction_all_zero_rewards = (all_zero_rewards_count / prompts_processed_count) if prompts_processed_count > 0 else 0
             fraction_all_one_rewards = (all_one_rewards_count / prompts_processed_count) if prompts_processed_count > 0 else 0
+
+            # Each item in processed_buffer corresponds to prompts_per_compute_loss prompts.
+            # We calculate a step size to ensure `minibatch_size` correctly refers to the number of prompts.
+            minibatch_step = max(1, minibatch_size // prompts_per_compute_loss)
             
             for epoch in range(epochs_per_batch):
-                random.shuffle(experience_buffer)  # Shuffle experience for each epoch
+                random.shuffle(processed_buffer)  # Shuffle experience for each epoch
                 
                 # Process in minibatches
-                for i in range(0, batch_size, minibatch_size):
-                    minibatch = experience_buffer[i:i+minibatch_size]   # Note: i+minibatch_size may exceed len(experience_buffer)
+                for i in range(0, len(processed_buffer), minibatch_step):
+                    minibatch = processed_buffer[i:i+minibatch_step]   # Note: i+minibatch_step may exceed len(processed_buffer)
                     
                     self.optimizer.zero_grad()
                     
@@ -598,8 +664,8 @@ class GRPOTrainer:
                             "epoch_per_batch": epoch + 1,
                         }, step=total_optim_steps)
                     
-                    minibatch_num = i // minibatch_size + 1
-                    total_minibatches = math.ceil(batch_size / minibatch_size)
+                    minibatch_num = i // minibatch_step + 1
+                    total_minibatches = math.ceil(len(processed_buffer) / minibatch_step)
                     
                     print(
                         f"Optim Step {total_optim_steps:05d} | Collection Step {collection_step}/{collection_steps}, Epoch {epoch+1}/{epochs_per_batch}, MiniBatch {minibatch_num}/{total_minibatches} | "
@@ -1103,6 +1169,7 @@ def main():
     parser.add_argument("--batch_size", type=int, default=1, help="Number of prompts to sample from for each optimization step.")
     parser.add_argument("--epochs_per_batch", type=int, default=4, help="Number of optimization epochs to run on each collected batch of experience")
     parser.add_argument("--minibatch_size", type=int, default=1, help="Size of minibatches for optimization.")
+    parser.add_argument("--prompts_per_compute_loss", type=int, default=1, help="Number of prompts to batch together for a single loss computation.")
     
     # LoRA configuration
     parser.add_argument("--use_lora", action="store_true", default=True, help="Use LoRA for parameter-efficient fine-tuning")
@@ -1305,6 +1372,7 @@ def main():
             rollouts_per_prompt=args.rollouts_per_prompt,
             prompts_per_generation=args.prompts_per_generation,
             max_new_tokens=args.max_new_tokens,
+            prompts_per_compute_loss=args.prompts_per_compute_loss,
             eval_dataset=eval_dataset,
             use_wandb=args.use_wandb,
             kl_threshold=args.kl_threshold,
