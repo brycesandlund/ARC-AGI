@@ -568,9 +568,6 @@ class GRPOTrainer:
                         f"reward_std: {avg_reward_std:.3f} | "
                         f"grad_norm: {grad_norm:.4f} | "
                         f"success: {avg_success_rate:.1%} | "
-                        f"adv_non_zero: {fraction_non_zero_advantages:.1%} | "
-                        f"all_0: {fraction_all_0_rewards:.1%} | "
-                        f"all_1: {fraction_all_1_rewards:.1%} | "
                         f"entropy: {avg_entropy:.4f}"
                     )
                 
