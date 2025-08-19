@@ -1,6 +1,8 @@
 import argparse
 import math
 import random
+import signal
+import sys
 import time
 from typing import List, Dict, Any, Optional, Tuple
 import copy
@@ -22,6 +24,36 @@ from reflexion_grpo_tests import test_sample, debug_batch_and_actions
 PAD_TOKEN_ID = None
 EOS_TOKEN_ID = None
 SEQUENCE_LENGTH_NORMALIZATION = 1000.0
+
+# Helper function for wandb cleanup
+def cleanup_wandb():
+    """Safely finish wandb run if it's active."""
+    if wandb.run is not None:
+        print("Finishing wandb run...")
+        try:
+            wandb.finish()
+            print("Wandb run finished.")
+        except Exception as e:
+            print(f"Failed to finish wandb: {e}")
+
+# Signal handler for graceful shutdown
+def signal_handler(signum, frame):
+    """Handle termination signals gracefully by finishing wandb and exiting."""
+    signal_names = {
+        signal.SIGINT: "SIGINT (CTRL+C)",
+        signal.SIGTERM: "SIGTERM (termination request)",
+        signal.SIGPIPE: "SIGPIPE (broken pipe/SSH disconnect)",
+        signal.SIGHUP: "SIGHUP (hangup/terminal closed)"
+    }
+    signal_name = signal_names.get(signum, f"signal {signum}")
+    print(f"\nReceived {signal_name}. Gracefully shutting down...")
+    
+    cleanup_wandb()
+    
+    print("Exiting gracefully.")
+    sys.exit(0)
+
+
 
 # ============================================================
 #   Generalized Reinforced Policy Optimization (GRPO)
@@ -517,8 +549,8 @@ class GRPOTrainer:
                             print("Warning: Model does not have `push_to_hub` method. Skipping checkpoint.")
                     
                     # Gradient Norm Calculation and Clipping. clip_grad_norm_ returns the total norm of
-                    # all parameters (viewed as a single vector) before clipping.
-                    grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip_norm).item()
+                    # all parameters (viewed as a single vector) BEFORE clipping.
+                    unclipped_grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip_norm).item()
 
                     self.optimizer.step()
                     
@@ -559,7 +591,7 @@ class GRPOTrainer:
                             "train/batch_reward_std": avg_reward_std,
                             "train/batch_success_rate": avg_success_rate,
                             "train/model_entropy": avg_entropy,
-                            "train/grad_norm": grad_norm,
+                            "train/unclipped_grad_norm": unclipped_grad_norm,
                             "train/fraction_all_zero_rewards": fraction_all_zero_rewards,
                             "train/fraction_all_one_rewards": fraction_all_one_rewards,
                             "collection_step": collection_step,
@@ -578,7 +610,7 @@ class GRPOTrainer:
                         f"lr: {current_lr:.2e} | "
                         f"reward: {avg_reward_mean:.3f} | "
                         f"reward_std: {avg_reward_std:.3f} | "
-                        f"grad_norm: {grad_norm:.4f} | "
+                        f"grad_norm: {unclipped_grad_norm:.4f} | "
                         f"success: {avg_success_rate:.1%} | "
                         f"zeros: {all_zero_rewards_count}/{prompts_processed_count} | "
                         f"ones: {all_one_rewards_count}/{prompts_processed_count} | "
@@ -1105,6 +1137,13 @@ def main():
 
     args = parser.parse_args()
 
+    # Register signal handlers for graceful shutdown
+    signal.signal(signal.SIGINT, signal_handler)   # CTRL+C
+    signal.signal(signal.SIGTERM, signal_handler)  # Termination request
+    signal.signal(signal.SIGPIPE, signal_handler)  # Broken pipe (common with SSH disconnects)
+    signal.signal(signal.SIGHUP, signal_handler)   # Hangup (terminal closed)
+    print("Signal handlers registered for graceful shutdown (CTRL+C, broken pipe, hangup, etc.)")
+
     # Initialize wandb if requested
     if args.use_wandb:
         wandb.init(
@@ -1235,65 +1274,72 @@ def main():
         grad_clip_norm=args.grad_clip_norm if args.grad_clip_norm > 0 else None,
     )
 
-    print("Starting GRPO fine-tuning with math problems …")
-    if args.use_lora:
-        print("Using LoRA for parameter-efficient fine-tuning.")
-    else:
-        print("Training full model. Consider using --use_lora for better memory efficiency.")
-    
-    # Create eval dataset once for reuse
-    print(f"Creating evaluation dataset with {args.eval_size} problems...")
-    
-    # Generate data for evaluation
-    eval_data = []
-    problem_generator = generate_math_problems(tokenizer, args.eval_size)
-    for problem in problem_generator:
-        eval_data.append({
-            "query": problem["prompt"],
-            "target": problem["target"],
-            "numbers": problem["numbers"]
-        })
-    
-    eval_dataset = Dataset.from_list(eval_data)
-    
-    # Run training using the new train method
-    training_results = trainer.train(
-        tokenizer=tokenizer,
-        collection_steps=collection_steps,
-        batch_size=args.batch_size,
-        epochs_per_batch=args.epochs_per_batch,
-        rollouts_per_prompt=args.rollouts_per_prompt,
-        prompts_per_generation=args.prompts_per_generation,
-        max_new_tokens=args.max_new_tokens,
-        eval_dataset=eval_dataset,
-        use_wandb=args.use_wandb,
-        kl_threshold=args.kl_threshold,
-        use_revision=args.use_revision,
-        minibatch_size=args.minibatch_size,
-        save_steps=args.save_steps,
-        repo_id=repo_id if args.use_lora else None,
-    )
+    try:
+        print("Starting GRPO fine-tuning with math problems …")
+        if args.use_lora:
+            print("Using LoRA for parameter-efficient fine-tuning.")
+        else:
+            print("Training full model. Consider using --use_lora for better memory efficiency.")
+        
+        # Create eval dataset once for reuse
+        print(f"Creating evaluation dataset with {args.eval_size} problems...")
+        
+        # Generate data for evaluation
+        eval_data = []
+        problem_generator = generate_math_problems(tokenizer, args.eval_size)
+        for problem in problem_generator:
+            eval_data.append({
+                "query": problem["prompt"],
+                "target": problem["target"],
+                "numbers": problem["numbers"]
+            })
+        
+        eval_dataset = Dataset.from_list(eval_data)
+        
+        # Run training using the new train method
+        training_results = trainer.train(
+            tokenizer=tokenizer,
+            collection_steps=collection_steps,
+            batch_size=args.batch_size,
+            epochs_per_batch=args.epochs_per_batch,
+            rollouts_per_prompt=args.rollouts_per_prompt,
+            prompts_per_generation=args.prompts_per_generation,
+            max_new_tokens=args.max_new_tokens,
+            eval_dataset=eval_dataset,
+            use_wandb=args.use_wandb,
+            kl_threshold=args.kl_threshold,
+            use_revision=args.use_revision,
+            minibatch_size=args.minibatch_size,
+            save_steps=args.save_steps,
+            repo_id=repo_id if args.use_lora else None,
+        )
 
-    print("Training complete!")
-    
-    # # Save model (LoRA adapters if using LoRA, full model otherwise)
-    # if args.use_lora:
-    #     print("Saving final LoRA adapters locally...")
-    #     save_directory = f"./lora_adapters_grpo_math-{run_id}"
-    #     model.save_pretrained(save_directory)
-    #     print(f"LoRA adapters saved to {save_directory}")
+        print("Training complete!")
+        
+        # # Save model (LoRA adapters if using LoRA, full model otherwise)
+        # if args.use_lora:
+        #     print("Saving final LoRA adapters locally...")
+        #     save_directory = f"./lora_adapters_grpo_math-{run_id}"
+        #     model.save_pretrained(save_directory)
+        #     print(f"LoRA adapters saved to {save_directory}")
 
-    #     print(f"Pushing final LoRA adapters to Hugging Face Hub: {repo_id}")
-    #     try:
-    #         model.push_to_hub(repo_id, commit_message="Final model checkpoint")
-    #         print(f"Successfully pushed to main branch of {repo_id}")
-    #     except Exception as e:
-    #         print(f"Failed to push final model to Hub: {e}")
-    # else:
-    #     print("To save full model, use: model.save_pretrained('./saved_model')")
-    
-    if args.use_wandb:
-        wandb.finish()
+        #     print(f"Pushing final LoRA adapters to Hugging Face Hub: {repo_id}")
+        #     try:
+        #         model.push_to_hub(repo_id, commit_message="Final model checkpoint")
+        #         print(f"Successfully pushed to main branch of {repo_id}")
+        #     except Exception as e:
+        #         print(f"Failed to push final model to Hub: {e}")
+        # else:
+        #     print("To save full model, use: model.save_pretrained('./saved_model')")
+        
+    except Exception as e:
+        print(f"\nTraining failed with exception: {e}")
+        import traceback
+        traceback.print_exc()
+        raise  # Re-raise to ensure non-zero exit code
+    finally:
+        # Always cleanup wandb, whether training completed successfully or failed
+        cleanup_wandb()
 
 
 if __name__ == "__main__":
