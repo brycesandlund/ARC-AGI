@@ -339,6 +339,9 @@ class GRPOTrainer:
             step_rewards_mean = []
             step_rewards_max = []
             step_success_rates = []
+            all_zero_rewards_count = 0
+            all_one_rewards_count = 0
+            prompts_processed_count = 0
 
             print(f"\nCollecting experience for collection step {collection_step}/{collection_steps}...")
             self.model.eval()
@@ -374,6 +377,13 @@ class GRPOTrainer:
                 loss_mask_chunks = torch.split(loss_mask, rollouts_per_prompt)
 
                 for i in range(prompts_per_generation):
+                    # Track reward statistics per-prompt
+                    prompts_processed_count += 1
+                    if torch.all(rewards_chunks[i] == 0):
+                        all_zero_rewards_count += 1
+                    if torch.all(rewards_chunks[i] == 1):
+                        all_one_rewards_count += 1
+
                     with torch.no_grad():
                         chunk_logp = self._compute_log_probs(self.model, input_ids_chunks[i])
 
@@ -409,6 +419,11 @@ class GRPOTrainer:
             self.model.train()
             kl_exceeded = False
             is_first_gradient_step = True
+            
+            # Calculate reward distribution fractions
+            fraction_all_zero_rewards = (all_zero_rewards_count / prompts_processed_count) if prompts_processed_count > 0 else 0
+            fraction_all_one_rewards = (all_one_rewards_count / prompts_processed_count) if prompts_processed_count > 0 else 0
+            
             for epoch in range(epochs_per_batch):
                 random.shuffle(experience_buffer)  # Shuffle experience for each epoch
                 
@@ -534,6 +549,8 @@ class GRPOTrainer:
                             "train/batch_success_rate": avg_success_rate,
                             "train/model_entropy": avg_entropy,
                             "train/grad_norm": grad_norm,
+                            "train/fraction_all_zero_rewards": fraction_all_zero_rewards,
+                            "train/fraction_all_one_rewards": fraction_all_one_rewards,
                             "step": total_optim_steps,
                             "collection_step": collection_step,
                             "epoch_per_batch": epoch + 1,
@@ -553,6 +570,8 @@ class GRPOTrainer:
                         f"reward_std: {avg_reward_std:.3f} | "
                         f"grad_norm: {grad_norm:.4f} | "
                         f"success: {avg_success_rate:.1%} | "
+                        f"zeros: {fraction_all_zero_rewards:.3f} | "
+                        f"ones: {fraction_all_one_rewards:.3f} | "
                         f"entropy: {avg_entropy:.4f}"
                     )
                 
