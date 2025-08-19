@@ -329,13 +329,16 @@ class GRPOTrainer:
             initial_metrics = self._run_evaluation(eval_dataset, tokenizer, max_new_tokens, "initial", 0, use_wandb)
 
         print("Starting GRPO training...")
+
+        leftover_experience = []
         
         # Main training loop (steps are now data collection cycles)
         for collection_step in range(1, collection_steps + 1):
             
             # --- 1. Data Collection Phase ---
             collection_start_time = time.time()
-            experience_buffer = []
+            experience_buffer = leftover_experience
+            leftover_experience = []
             step_rewards_mean = []
             step_rewards_max = []
             step_success_rates = []
@@ -404,6 +407,9 @@ class GRPOTrainer:
                 step_success_rates.append((rewards > 0).float().mean().item())
                 print(f"  Collected micro-batch {micro_step+1}/projected {batch_size // prompts_per_generation} | reward: {batch_reward_mean:.3f}")
                 micro_step += 1
+
+            leftover_experience = experience_buffer[batch_size:]
+            print(f"Saving {len(leftover_experience)} trajectories for next collection step...")
             
             # Clear GPU cache after all experience collection is complete
             print("Clearing GPU cache after experience collection...")
