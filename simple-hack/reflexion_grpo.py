@@ -18,7 +18,7 @@ from datasets import Dataset
 
 # Import math problem generation and reward functions
 from functions import generate_math_problems, math_reward_func, parse_completion
-from reflexion_grpo_tests import test_sample, debug_batch_and_actions
+from reflexion_grpo_tests import test_sample, debug_batch_and_actions, test_combined_experience
 
 # Global token IDs - initialized in main() after tokenizer is loaded
 PAD_TOKEN_ID = None
@@ -505,6 +505,8 @@ class GRPOTrainer:
                 with torch.no_grad():
                     old_logp_full = self._compute_log_probs(self.model, combined_experience['input_ids'])
                     combined_experience['old_logp_full'] = old_logp_full.detach().to('cpu')
+
+                test_combined_experience(combined_experience, prompts_per_compute_loss, rollouts_per_prompt)
                 
                 processed_buffer.append(combined_experience)
 

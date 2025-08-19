@@ -82,3 +82,60 @@ def test_sample(input_ids, rewards, advantages, loss_mask, prompts, completions,
     print(f"✅ completions is a list of strings of correct length: {len(completions)}")
 
     print("--- test_sample PASSED ---\\n")
+
+def test_combined_experience(combined_experience, prompts_per_compute_loss, rollouts_per_prompt):
+    """
+    Validates the structure, shapes, and dtypes of a combined_experience batch.
+    """
+    print("\\n--- Running test_combined_experience ---")
+    
+    # Expected number of sequences in the batch
+    expected_batch_size = prompts_per_compute_loss * rollouts_per_prompt
+    
+    # 1. Check for required keys
+    required_keys = ['input_ids', 'loss_mask', 'rewards', 'advantages', 'old_logp_full']
+    for key in required_keys:
+        assert key in combined_experience, f"Missing key '{key}' in combined_experience"
+    print("✅ All required keys are present.")
+        
+    # 2. Check tensor types and shapes
+    input_ids = combined_experience['input_ids']
+    loss_mask = combined_experience['loss_mask']
+    rewards = combined_experience['rewards']
+    advantages = combined_experience['advantages']
+    old_logp_full = combined_experience['old_logp_full']
+    
+    # input_ids
+    assert isinstance(input_ids, torch.Tensor), "input_ids should be a torch.Tensor"
+    assert input_ids.dim() == 2, "input_ids should be a 2D tensor"
+    assert input_ids.shape[0] == expected_batch_size, f"input_ids batch size should be {expected_batch_size}, but is {input_ids.shape[0]}"
+    print(f"✅ input_ids shape is correct: {input_ids.shape}")
+
+    # loss_mask
+    assert isinstance(loss_mask, torch.Tensor), "loss_mask should be a torch.Tensor"
+    assert loss_mask.dim() == 2, "loss_mask should be a 2D tensor"
+    assert loss_mask.shape[0] == expected_batch_size, f"loss_mask batch size should be {expected_batch_size}, but is {loss_mask.shape[0]}"
+    assert loss_mask.shape[1] == input_ids.shape[1] - 1, "loss_mask sequence length is incorrect"
+    assert loss_mask.dtype == torch.bool, "loss_mask should be a boolean tensor"
+    print(f"✅ loss_mask shape and dtype are correct: {loss_mask.shape}, {loss_mask.dtype}")
+
+    # rewards
+    assert isinstance(rewards, torch.Tensor), "rewards should be a torch.Tensor"
+    assert rewards.dim() == 1, "rewards should be a 1D tensor"
+    assert rewards.shape[0] == expected_batch_size, f"rewards batch size should be {expected_batch_size}, but is {rewards.shape[0]}"
+    print(f"✅ rewards shape is correct: {rewards.shape}")
+
+    # advantages
+    assert isinstance(advantages, torch.Tensor), "advantages should be a torch.Tensor"
+    assert advantages.dim() == 1, "advantages should be a 1D tensor"
+    assert advantages.shape[0] == expected_batch_size, f"advantages batch size should be {expected_batch_size}, but is {advantages.shape[0]}"
+    print(f"✅ advantages shape is correct: {advantages.shape}")
+
+    # old_logp_full
+    assert isinstance(old_logp_full, torch.Tensor), "old_logp_full should be a torch.Tensor"
+    assert old_logp_full.dim() == 2, "old_logp_full should be a 2D tensor"
+    assert old_logp_full.shape[0] == expected_batch_size, f"old_logp_full batch size should be {expected_batch_size}, but is {old_logp_full.shape[0]}"
+    assert old_logp_full.shape[1] == input_ids.shape[1] - 1, "old_logp_full sequence length is incorrect"
+    print(f"✅ old_logp_full shape is correct: {old_logp_full.shape}")
+    
+    print("--- test_combined_experience PASSED ---\\n")
