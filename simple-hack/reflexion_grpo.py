@@ -387,16 +387,12 @@ class GRPOTrainer:
                     if torch.all(rewards_chunks[i] == 1):
                         all_one_rewards_count += 1
 
-                    with torch.no_grad():
-                        chunk_logp = self._compute_log_probs(self.model, input_ids_chunks[i])
-
                     if (not torch.all(advantages_chunks[i] == 0)):
                         experience_buffer.append({
                             'input_ids': input_ids_chunks[i].to('cpu'), 
                             'rewards': rewards_chunks[i].to('cpu'),
                             'advantages': advantages_chunks[i].to('cpu'),
                             'loss_mask': loss_mask_chunks[i].to('cpu'),
-                            'old_logp_full': chunk_logp.detach().to('cpu')
                         })
                 
                 # Track and log rewards from this collection micro-batch
@@ -411,6 +407,14 @@ class GRPOTrainer:
             leftover_experience = experience_buffer[batch_size:]
             print(f"Saving {len(leftover_experience)} trajectories for next collection step...")
             
+
+            # Calculate old_logp_full for all trajectories we will optimize
+            for experience in experience_buffer:
+                with torch.no_grad():
+                    old_logp_full = self._compute_log_probs(self.model, experience['input_ids'])
+                    experience['old_logp_full'] = old_logp_full.detach().to('cpu')
+
+
             # Clear GPU cache after all experience collection is complete
             print("Clearing GPU cache after experience collection...")
             torch.cuda.empty_cache()
