@@ -1051,7 +1051,6 @@ def main():
     print("\n")
     print("Log into Hugging Face to save model checkpoints!!!!!!!!!!!!")
     print("\n")
-    print("\n")
     
     # Set print options to print full tensors
     torch.set_printoptions(threshold=10_000, linewidth=200)
