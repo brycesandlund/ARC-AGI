@@ -342,7 +342,8 @@ class GRPOTrainer:
 
             print(f"\nCollecting experience for collection step {collection_step}/{collection_steps}...")
             self.model.eval()
-            for micro_step in range(batch_size // prompts_per_generation):
+            micro_step = 0
+            while (len(experience_buffer) < batch_size):
                 # Sample a fresh batch for each accumulation step
                 if use_revision:
                     sample_start_time = time.time()
@@ -376,13 +377,14 @@ class GRPOTrainer:
                     with torch.no_grad():
                         chunk_logp = self._compute_log_probs(self.model, input_ids_chunks[i])
 
-                    experience_buffer.append({
-                        'input_ids': input_ids_chunks[i].to('cpu'), 
-                        'rewards': rewards_chunks[i].to('cpu'),
-                        'advantages': advantages_chunks[i].to('cpu'),
-                        'loss_mask': loss_mask_chunks[i].to('cpu'),
-                        'old_logp_full': chunk_logp.detach().to('cpu')
-                    })
+                    if (not torch.all(advantages_chunks[i] == 0)):
+                        experience_buffer.append({
+                            'input_ids': input_ids_chunks[i].to('cpu'), 
+                            'rewards': rewards_chunks[i].to('cpu'),
+                            'advantages': advantages_chunks[i].to('cpu'),
+                            'loss_mask': loss_mask_chunks[i].to('cpu'),
+                            'old_logp_full': chunk_logp.detach().to('cpu')
+                        })
                 
                 # Track and log rewards from this collection micro-batch
                 batch_reward_mean = rewards.mean().item()
@@ -390,7 +392,8 @@ class GRPOTrainer:
                 step_rewards_mean.append(batch_reward_mean)
                 step_rewards_max.append(rewards.max().item())
                 step_success_rates.append((rewards > 0).float().mean().item())
-                print(f"  Collected micro-batch {micro_step+1}/{batch_size // prompts_per_generation} | reward: {batch_reward_mean:.3f}")
+                print(f"  Collected micro-batch {micro_step+1}/projected {batch_size // prompts_per_generation} | reward: {batch_reward_mean:.3f}")
+                micro_step += 1
             
             # Clear GPU cache after all experience collection is complete
             print("Clearing GPU cache after experience collection...")
@@ -411,7 +414,7 @@ class GRPOTrainer:
                 
                 # Process in minibatches
                 for i in range(0, len(experience_buffer), minibatch_size):
-                    minibatch = experience_buffer[i:i+minibatch_size]
+                    minibatch = experience_buffer[i:i+minibatch_size]   # Note: i+minibatch_size may exceed len(experience_buffer)
                     
                     self.optimizer.zero_grad()
                     
@@ -421,7 +424,6 @@ class GRPOTrainer:
                     minibatch_clipped_fractions = []
                     minibatch_response_lengths = []
                     minibatch_entropies = []
-                    non_zero_advantages_count = 0
 
                     # Iterate over the collected experience in the minibatch
                     for micro_batch_data in minibatch:
@@ -444,12 +446,8 @@ class GRPOTrainer:
                             is_first_step=is_first_gradient_step,
                         )
                         compute_loss_time = time.time() - compute_loss_start_time
-                        print(f"    compute_loss took {compute_loss_time:.3f}s, advantages non-zero: {torch.any(micro_batch_data['advantages'] != 0).item()}")
+                        print(f"    compute_loss took {compute_loss_time:.3f}s")
                         
-                        # Track advantages for logging
-                        if torch.any(micro_batch_data['advantages'] != 0):
-                            non_zero_advantages_count += 1
-
                         loss = metrics['loss']
                         
                         # Accumulate gradients
@@ -522,8 +520,6 @@ class GRPOTrainer:
                     avg_reward_std = minibatch_rewards.std().item()
                     avg_success_rate = (minibatch_rewards > 0).float().mean().item()
                     
-                    fraction_non_zero_advantages = non_zero_advantages_count / len(minibatch) if minibatch else 0.0
-
                     if use_wandb:
                         wandb.log({
                             "train/loss": avg_loss,
@@ -538,7 +534,6 @@ class GRPOTrainer:
                             "train/batch_success_rate": avg_success_rate,
                             "train/model_entropy": avg_entropy,
                             "train/grad_norm": grad_norm,
-                            "train/fraction_non_zero_advantages": fraction_non_zero_advantages,
                             "step": total_optim_steps,
                             "collection_step": collection_step,
                             "epoch_per_batch": epoch + 1,
