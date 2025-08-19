@@ -422,8 +422,8 @@ class GRPOTrainer:
                     minibatch_response_lengths = []
                     minibatch_entropies = []
                     non_zero_advantages_count = 0
-
-                    # Iterate over the collected experience in the minibatch
+                    all_0_rewards_count = 0
+                    all_1_rewards_count = 0
                     for micro_batch_data in minibatch:
 
                         # debug_batch_and_actions(
@@ -449,6 +449,12 @@ class GRPOTrainer:
                         # Track advantages for logging
                         if torch.any(micro_batch_data['advantages'] != 0):
                             non_zero_advantages_count += 1
+                        
+                        rewards = micro_batch_data['rewards']
+                        if torch.all(rewards == 0):
+                            all_0_rewards_count += 1
+                        elif torch.all(rewards == 1):
+                            all_1_rewards_count += 1
 
                         loss = metrics['loss']
                         
@@ -523,6 +529,8 @@ class GRPOTrainer:
                     avg_success_rate = (minibatch_rewards > 0).float().mean().item()
                     
                     fraction_non_zero_advantages = non_zero_advantages_count / len(minibatch) if minibatch else 0.0
+                    fraction_all_0_rewards = all_0_rewards_count / len(minibatch) if minibatch else 0.0
+                    fraction_all_1_rewards = all_1_rewards_count / len(minibatch) if minibatch else 0.0
 
                     if use_wandb:
                         wandb.log({
@@ -539,6 +547,8 @@ class GRPOTrainer:
                             "train/model_entropy": avg_entropy,
                             "train/grad_norm": grad_norm,
                             "train/fraction_non_zero_advantages": fraction_non_zero_advantages,
+                            "train/fraction_all_0_rewards": fraction_all_0_rewards,
+                            "train/fraction_all_1_rewards": fraction_all_1_rewards,
                             "step": total_optim_steps,
                             "collection_step": collection_step,
                             "epoch_per_batch": epoch + 1,
