@@ -506,7 +506,7 @@ class GRPOTrainer:
                     old_logp_full = self._compute_log_probs(self.model, combined_experience['input_ids'])
                     combined_experience['old_logp_full'] = old_logp_full.detach().to('cpu')
 
-                test_combined_experience(combined_experience, prompts_per_compute_loss, rollouts_per_prompt)
+                # test_combined_experience(combined_experience, prompts_per_compute_loss, rollouts_per_prompt)
                 
                 processed_buffer.append(combined_experience)
 
@@ -576,7 +576,7 @@ class GRPOTrainer:
                         loss = metrics['loss']
                         
                         # Accumulate gradients
-                        loss = loss / len(minibatch)    # Normalize loss by number of minibatches
+                        loss = loss / prompts_per_compute_loss # Normalize loss by number of prompts in call to compute_loss
                         loss.backward()
 
                         # Store metrics for logging
