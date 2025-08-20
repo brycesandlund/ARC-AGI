@@ -518,7 +518,7 @@ class GRPOTrainer:
             collection_time = time.time() - collection_start_time
             print(f"Data collection for step {collection_step} took {collection_time:.2f}s")
             if use_wandb:
-                wandb.log({"train/data_collection_time": collection_time, "collection_step": collection_step}, step=total_optim_steps)
+                wandb.log({"train/data_collection_time": collection_time, "collection_step": collection_step}, step=total_optim_steps+1)
 
             # --- 2. Optimization Phase ---
             optimization_start_time = time.time()
@@ -678,7 +678,7 @@ class GRPOTrainer:
                         f"lr: {current_lr:.2e} | "
                         f"reward: {avg_reward_mean:.3f} | "
                         f"reward_std: {avg_reward_std:.3f} | "
-                        f"grad_norm: {unclipped_grad_norm:.4f} | "
+                        f"unclipped_grad_norm: {unclipped_grad_norm:.4f} | "
                         f"success: {avg_success_rate:.1%} | "
                         f"zeros: {all_zero_rewards_count}/{prompts_processed_count} | "
                         f"ones: {all_one_rewards_count}/{prompts_processed_count} | "
