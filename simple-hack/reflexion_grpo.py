@@ -1206,6 +1206,22 @@ def main():
 
     args = parser.parse_args()
 
+    # --- Batch Size Validations ---
+    # We must have mini_batch_size evenly-divide batch_size.
+    if args.batch_size % args.minibatch_size != 0:
+        print(f"Error: minibatch_size ({args.minibatch_size}) must evenly divide batch_size ({args.batch_size}).")
+        sys.exit(1)
+        
+    # We must have prompts_per_generation evenly-divide batch_size.
+    if args.batch_size % args.prompts_per_generation != 0:
+        print(f"Error: prompts_per_generation ({args.prompts_per_generation}) must evenly divide batch_size ({args.batch_size}).")
+        sys.exit(1)
+
+    # We must have prompts_per_compute_loss evenly-divide mini_batch_size.
+    if args.minibatch_size % args.prompts_per_compute_loss != 0:
+        print(f"Error: prompts_per_compute_loss ({args.prompts_per_compute_loss}) must evenly divide minibatch_size ({args.minibatch_size}).")
+        sys.exit(1)
+
     # Register signal handlers for graceful shutdown
     signal.signal(signal.SIGINT, signal_handler)   # CTRL+C
     signal.signal(signal.SIGTERM, signal_handler)  # Termination request
