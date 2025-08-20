@@ -576,7 +576,7 @@ class GRPOTrainer:
                         loss = metrics['loss']
                         
                         # Accumulate gradients
-                        loss = loss / minibatch_size
+                        loss = loss / minibatch_size    # Normalize by minibatch_size
                         loss.backward()
 
                         # Store metrics for logging
