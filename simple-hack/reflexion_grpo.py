@@ -576,7 +576,7 @@ class GRPOTrainer:
                         loss = metrics['loss']
                         
                         # Accumulate gradients
-                        loss = loss / prompts_per_compute_loss # Normalize loss by number of prompts in call to compute_loss
+                        loss = loss / minibatch_size
                         loss.backward()
 
                         # Store metrics for logging
