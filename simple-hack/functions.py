@@ -3,7 +3,7 @@ from datasets import Dataset
 import random
 import re
 
-LOG_FREQUENCY = 0.02 # Print logs every 20 calls on average
+LOG_FREQUENCY = 0.02 # Print logs every 50 calls on average
 
 def parse_completion(completion: str) -> tuple[str, str]:
     """
