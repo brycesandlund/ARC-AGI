@@ -335,6 +335,7 @@ class GRPOTrainer:
         eval_type: str,
         episode: int,
         use_wandb: bool = False,
+        train_base: bool = False,
     ) -> Dict[str, Any]:
         """Run evaluation and log results.
         
@@ -346,6 +347,7 @@ class GRPOTrainer:
         eval_type : "initial" or "final" for logging purposes
         episode : current episode number for wandb logging
         use_wandb : whether to log to wandb
+        train_base : whether to use the base model prompt.
         
         Returns
         -------
@@ -354,7 +356,7 @@ class GRPOTrainer:
         self.model.eval()
 
         print(f"\nRunning {eval_type} evaluation...")
-        metrics = evaluate_model(self.model, tokenizer, eval_dataset, max_new_tokens)
+        metrics = evaluate_model(self.model, tokenizer, eval_dataset, max_new_tokens, train_base=train_base)
         print(f"{eval_type.capitalize()} metrics: {metrics}")
 
         if use_wandb:
@@ -415,7 +417,7 @@ class GRPOTrainer:
         
         # Initial evaluation if eval dataset provided
         if eval_dataset is not None:
-            initial_metrics = self._run_evaluation(eval_dataset, tokenizer, max_new_tokens, "initial", 0, use_wandb)
+            initial_metrics = self._run_evaluation(eval_dataset, tokenizer, max_new_tokens, "initial", 0, use_wandb, train_base=train_base)
 
         print("Starting GRPO training...")
 
@@ -698,7 +700,7 @@ class GRPOTrainer:
 
         # Final evaluation if eval dataset provided
         if eval_dataset is not None:
-            final_metrics = self._run_evaluation(eval_dataset, tokenizer, max_new_tokens, "final", total_optim_steps, use_wandb)
+            final_metrics = self._run_evaluation(eval_dataset, tokenizer, max_new_tokens, "final", total_optim_steps, use_wandb, train_base=train_base)
                 
             # Log training summary
             if use_wandb and wandb.run is not None:
@@ -811,7 +813,7 @@ def compute_sequence_advantages(rewards: torch.Tensor, prompts_per_generation: i
     return advantages_per_prompt.view(-1)
 
 
-def generate_and_decode(model, tokenizer, prompts, max_new_tokens, disable_adapter=False, enable_thinking: bool = True, **gen_kwargs):
+def generate_and_decode(model, tokenizer, prompts, max_new_tokens, disable_adapter=False, enable_thinking: bool = True, train_base: bool = False, **gen_kwargs):
     """Generates completions from a model and decodes them.
 
     Parameters
@@ -828,6 +830,8 @@ def generate_and_decode(model, tokenizer, prompts, max_new_tokens, disable_adapt
         If True, temporarily disables PEFT adapters during generation when supported.
     enable_thinking : bool, optional
         If True, enables the chat template's "thinking" mode when available.
+    train_base : bool, optional
+        If True, uses prompts directly without applying a chat template.
     **gen_kwargs : Any
         Additional keyword arguments forwarded to `model.generate()`.
 
@@ -844,25 +848,28 @@ def generate_and_decode(model, tokenizer, prompts, max_new_tokens, disable_adapt
           Shape: `(batch_size, seq_len - 1)`.
     """
     
-    # Convert prompts to chat message format
-    messages_list = [[{"role": "user", "content": p}] for p in prompts]
-    
-    # # Debug: Print prompts for debugging
-    # print("Debug: Prompts being processed:")
-    # for i, prompt in enumerate(prompts):
-    #     print(f"Prompt {i}: {prompt}")
-    # print()
-    
-    # Apply chat template with thinking mode control
-    # This creates the full prompt string including special tokens
-    processed_prompts = [
-        tokenizer.apply_chat_template(
-            messages,
-            tokenize=False,
-            add_generation_prompt=True, # Note: Transformers recommends not using this during training but you get gibberish w/o it
-            enable_thinking=enable_thinking
-        ) for messages in messages_list
-    ]
+    if train_base:
+        processed_prompts = prompts
+    else:
+        # Convert prompts to chat message format
+        messages_list = [[{"role": "user", "content": p}] for p in prompts]
+        
+        # # Debug: Print prompts for debugging
+        # print("Debug: Prompts being processed:")
+        # for i, prompt in enumerate(prompts):
+        #     print(f"Prompt {i}: {prompt}")
+        # print()
+        
+        # Apply chat template with thinking mode control
+        # This creates the full prompt string including special tokens
+        processed_prompts = [
+            tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True, # Note: Transformers recommends not using this during training but you get gibberish w/o it
+                enable_thinking=enable_thinking
+            ) for messages in messages_list
+        ]
 
     tokenized = tokenizer(processed_prompts, return_tensors="pt", padding=True, truncation=True)
     
@@ -997,6 +1004,7 @@ The revised completion should be in the format: <think>chain-of-thought</think> 
         max_new_tokens,
         disable_adapter=disable_adapter,
         enable_thinking=enable_thinking,
+        train_base=False,
     )
 
     # Use revised final answers only if thinking mode is enabled, otherwise use original completions
@@ -1066,7 +1074,7 @@ def sample(model, tokenizer, rollouts_per_prompt: int = 4, prompts_per_generatio
     prompts = [problem["prompt"] for problem in problems]
 
     # Generate completions using the model
-    completions, generated_ids, loss_mask = generate_and_decode(model, tokenizer, prompts, max_new_tokens, enable_thinking=True)
+    completions, generated_ids, loss_mask = generate_and_decode(model, tokenizer, prompts, max_new_tokens, enable_thinking=True, train_base=train_base)
     
     # Create the batch from prompts and generated completions
     rewards = torch.tensor(math_reward_func(completions, prompts), dtype=torch.float32)
@@ -1079,7 +1087,7 @@ def sample(model, tokenizer, rollouts_per_prompt: int = 4, prompts_per_generatio
     return input_ids, rewards, advantages, loss_mask, prompts, completions
 
 
-def evaluate_model(model, tokenizer, eval_dataset, max_new_tokens=512, batch_size=12):
+def evaluate_model(model, tokenizer, eval_dataset, max_new_tokens=512, batch_size=12, train_base: bool = False):
     """Batched evaluation that uses the same chat templating and generation path as training."""
 
     model.eval()
@@ -1104,6 +1112,7 @@ def evaluate_model(model, tokenizer, eval_dataset, max_new_tokens=512, batch_siz
             batch_prompts,
             max_new_tokens,
             enable_thinking=True,
+            train_base=train_base,
         )
 
         # Re-tokenize prompts to get prompt lengths for response length calculation
