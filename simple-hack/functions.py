@@ -3,7 +3,7 @@ from datasets import Dataset
 import random
 import re
 
-LOG_FREQUENCY = 0.02 # Print logs every 50 calls on average
+LOG_FREQUENCY = 1 # Print logs every 50 calls on average
 
 def parse_completion(completion: str) -> tuple[str, str]:
     """
@@ -240,8 +240,24 @@ def generate_math_problems(tokenizer, dataset_size):
         if numbers and expression:  # Only yield if we successfully generated a problem
             # Create prompt similar to test_inference
             numbers_str = ", ".join(map(str, numbers))
-            prompt_content = f"Using the numbers {numbers_str} exactly once in mathematical notation using addition, subtraction, multiplication, division, and/or parentheses, create an expression that equals {target}. Keep your reasoning in the <think> block brief. Answer exactly in plain mathematical notation (DO NOT USE LATEX), WITH NO ADDITIONAL TEXT. For example, if the provided numbers are 8, 3, 2, 3, a valid answer would be: (3 / 3 + 2) * 8. Or, if the numbers were 8, 2, 9, 9, a valid answer would be 9 + 9 - 2 + 8. ANSWER AS SOON AS A CORRECT EXPRESSION IS FOUND. Do not include = {target} in your answer."
+
+
+            # REASONING-TRAINED PROMPT:
+
+            # prompt_content = f"Using the numbers {numbers_str} exactly once in mathematical notation using addition, subtraction, multiplication, division, and/or parentheses, create an expression that equals {target}. Keep your reasoning in the <think> block brief. Answer exactly in plain mathematical notation (DO NOT USE LATEX), WITH NO ADDITIONAL TEXT. For example, if the provided numbers are 8, 3, 2, 3, a valid answer would be: (3 / 3 + 2) * 8. Or, if the numbers were 8, 2, 9, 9, a valid answer would be 9 + 9 - 2 + 8. ANSWER AS SOON AS A CORRECT EXPRESSION IS FOUND. Do not include = {target} in your answer."
             
+
+            # R1-ZERO PROMPT:
+            prompt_content = (
+            "A conversation between User and Assistant. The user asks a question, and the Assistant solves it. "
+            "The assistant first thinks about the reasoning process in the <think></think> tags and then provides the user with the answer.\n"
+            f"User: Using the numbers {numbers_str} exactly once in mathematical notation using addition, "
+            "subtraction, multiplication, division, and/or parentheses, create an expression that equals {target}."
+            "Show your work in <think> </think> tags. Output your answer after closing the </think> tag WITH NO ADDITIONAL TEXT.For example, if the provided numbers are 8, 3, 2, 3, a valid response would be Assistant: <think> Hm, maybe I can use 3 / 3 + 2 to get 3. Then I can multiply that by 8 to get 24. </think>(3 / 3 + 2) * 8.\n"
+            "Assistant: "
+        )
+
+
             # messages = [{"role": "user", "content": prompt_content}]
             
             # # Apply chat template with thinking mode enabled
