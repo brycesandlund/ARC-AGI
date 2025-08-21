@@ -2,8 +2,12 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from datasets import Dataset
 import random
 import re
+from typing import List, Dict, Any, Optional
 
 LOG_FREQUENCY = 1 # Print logs every 50 calls on average
+
+# Set a seed for reproducibility
+random.seed(42)
 
 def parse_completion(completion: str) -> tuple[str, str]:
     """
@@ -226,7 +230,7 @@ def test_inference(model_name):
     result_is_correct = is_correct(content, 24)
     print(f"Is the answer correct? {result_is_correct}")
 
-def generate_math_problems(tokenizer, dataset_size):
+def generate_math_problems(tokenizer, dataset_size, train_base: bool = False):
     """
     Generator function that creates math problems using generate_problem.
     Yields dictionary with 'prompt' containing the problem description, formatted with thinking template.
@@ -241,32 +245,19 @@ def generate_math_problems(tokenizer, dataset_size):
             # Create prompt similar to test_inference
             numbers_str = ", ".join(map(str, numbers))
 
-
-            # REASONING-TRAINED PROMPT:
-
-            # prompt_content = f"Using the numbers {numbers_str} exactly once in mathematical notation using addition, subtraction, multiplication, division, and/or parentheses, create an expression that equals {target}. Keep your reasoning in the <think> block brief. Answer exactly in plain mathematical notation (DO NOT USE LATEX), WITH NO ADDITIONAL TEXT. For example, if the provided numbers are 8, 3, 2, 3, a valid answer would be: (3 / 3 + 2) * 8. Or, if the numbers were 8, 2, 9, 9, a valid answer would be 9 + 9 - 2 + 8. ANSWER AS SOON AS A CORRECT EXPRESSION IS FOUND. Do not include = {target} in your answer."
-            
-
-            # R1-ZERO PROMPT:
-            prompt_content = (
-            "A conversation between User and Assistant. The user asks a question, and the Assistant solves it. "
-            "The assistant first thinks about the reasoning process in the <think></think> tags and then provides the user with the answer.\n"
-            f"User: Using the numbers {numbers_str} exactly once in mathematical notation using addition, "
-            "subtraction, multiplication, division, and/or parentheses, create an expression that equals {target}."
-            "Show your work in <think> </think> tags. Output your answer after closing the </think> tag WITH NO ADDITIONAL TEXT.For example, if the provided numbers are 8, 3, 2, 3, a valid response would be Assistant: <think> Hm, maybe I can use 3 / 3 + 2 to get 3. Then I can multiply that by 8 to get 24. </think>(3 / 3 + 2) * 8.\n"
-            "Assistant: "
-        )
-
-
-            # messages = [{"role": "user", "content": prompt_content}]
-            
-            # # Apply chat template with thinking mode enabled
-            # prompt = tokenizer.apply_chat_template(
-            #     messages,
-            #     tokenize=False,
-            #     add_generation_prompt=True,
-            #     enable_thinking=True
-            # )
+            if train_base:
+                # R1-ZERO PROMPT:
+                prompt_content = (
+                    "A conversation between User and Assistant. The user asks a question, and the Assistant solves it. "
+                    "The assistant first thinks about the reasoning process in the <think></think> tags and then provides the user with the answer.\n"
+                    f"User: Using the numbers {numbers_str} exactly once in mathematical notation using addition, "
+                    "subtraction, multiplication, division, and/or parentheses, create an expression that equals {target}."
+                    "Show your work in <think> </think> tags. Output your answer after closing the </think> tag WITH NO ADDITIONAL TEXT.For example, if the provided numbers are 8, 3, 2, 3, a valid response would be Assistant: <think> Hm, maybe I can use 3 / 3 + 2 to get 3. Then I can multiply that by 8 to get 24. </think>(3 / 3 + 2) * 8.\n"
+                    "Assistant: "
+                )
+            else:
+                # REASONING-TRAINED PROMPT:
+                prompt_content = f"Using the numbers {numbers_str} exactly once in mathematical notation using addition, subtraction, multiplication, division, and/or parentheses, create an expression that equals {target}. Keep your reasoning in the <think> block brief. Answer exactly in plain mathematical notation (DO NOT USE LATEX), WITH NO ADDITIONAL TEXT. For example, if the provided numbers are 8, 3, 2, 3, a valid answer would be: (3 / 3 + 2) * 8. Or, if the numbers were 8, 2, 9, 9, a valid answer would be 9 + 9 - 2 + 8. ANSWER AS SOON AS A CORRECT EXPRESSION IS FOUND. Do not include = {target} in your answer."
             
             yield {
                 "prompt": prompt_content,

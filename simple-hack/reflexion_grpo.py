@@ -385,6 +385,7 @@ class GRPOTrainer:
         minibatch_size: int = 1,
         save_steps: int = 0,
         repo_id: Optional[str] = None,
+        train_base: bool = False,
     ) -> Dict[str, Any]:
         """Train the model using GRPO.
         
@@ -403,6 +404,7 @@ class GRPOTrainer:
         minibatch_size : size of minibatches for optimization
         save_steps : number of optimization steps between saving LoRA checkpoints
         repo_id : Hugging Face Hub repository ID to push checkpoints to.
+        train_base : whether to use the base model prompt.
         
         Returns
         -------
@@ -448,13 +450,14 @@ class GRPOTrainer:
                         prompts_per_generation=prompts_per_generation,
                         max_new_tokens=max_new_tokens,
                         disable_adapter=False,
-                        enable_thinking=False
+                        enable_thinking=False,
+                        train_base=train_base,
                     )
                     sample_time = time.time() - sample_start_time
                     print(f"  sample_and_revise took {sample_time:.2f}s")
                 else:
                     sample_start_time = time.time()
-                    batch = sample(self.model, tokenizer, rollouts_per_prompt=rollouts_per_prompt, prompts_per_generation=prompts_per_generation, max_new_tokens=max_new_tokens)
+                    batch = sample(self.model, tokenizer, rollouts_per_prompt=rollouts_per_prompt, prompts_per_generation=prompts_per_generation, max_new_tokens=max_new_tokens, train_base=train_base)
                     sample_time = time.time() - sample_start_time
                     print(f"  sample took {sample_time:.2f}s")
                 
@@ -912,7 +915,8 @@ def sample_and_revise(
     prompts_per_generation: int,
     max_new_tokens: int, 
     disable_adapter: bool, 
-    enable_thinking: bool
+    enable_thinking: bool,
+    train_base: bool = False,
 ):
     """Samples, revises, and evaluates completions.
 
@@ -964,7 +968,7 @@ def sample_and_revise(
     """
     # 1. First pass: Sample from the base model to get initial solutions
     _, _, _, _, prompts, initial_completions = sample(
-        model, tokenizer, rollouts_per_prompt, prompts_per_generation, max_new_tokens
+        model, tokenizer, rollouts_per_prompt, prompts_per_generation, max_new_tokens, train_base=train_base
     )
 
     # 2. Second pass: Construct revision prompts and revise with the revision_model
@@ -1012,7 +1016,7 @@ The revised completion should be in the format: <think>chain-of-thought</think> 
     return input_ids, rewards, advantages, loss_mask, prompts, final_completions
 
 
-def sample(model, tokenizer, rollouts_per_prompt: int = 4, prompts_per_generation: int = 1, max_new_tokens: int = 512):
+def sample(model, tokenizer, rollouts_per_prompt: int = 4, prompts_per_generation: int = 1, max_new_tokens: int = 512, train_base: bool = False):
     """Generate a batch of math problems and model completions for GRPO training.
 
     This function first generates a set of unique math problems, then duplicates them
@@ -1052,7 +1056,7 @@ def sample(model, tokenizer, rollouts_per_prompt: int = 4, prompts_per_generatio
     """
     
     # Generate `prompts_per_generation` unique math problems
-    problem_generator = generate_math_problems(tokenizer, prompts_per_generation)
+    problem_generator = generate_math_problems(tokenizer, prompts_per_generation, train_base=train_base)
     unique_problems = list(problem_generator)
     
     # Duplicate each problem `rollouts_per_prompt` times
@@ -1195,6 +1199,7 @@ def main():
     
     # Revision configuration
     parser.add_argument("--use_revision", action="store_true", default=False, help="Use revision model to revise completions during sampling.")
+    parser.add_argument("--train_base", action="store_true", default=False, help="Use prompt / config to train base model.")
     
     # Learning rate scheduler configuration
     parser.add_argument("--lr_schedule", action="store_true", default=True, help="Use linear learning rate decay")
@@ -1371,7 +1376,7 @@ def main():
         
         # Generate data for evaluation
         eval_data = []
-        problem_generator = generate_math_problems(tokenizer, args.eval_size)
+        problem_generator = generate_math_problems(tokenizer, args.eval_size, train_base=args.train_base)
         for problem in problem_generator:
             eval_data.append({
                 "query": problem["prompt"],
@@ -1398,6 +1403,7 @@ def main():
             minibatch_size=args.minibatch_size,
             save_steps=args.save_steps,
             repo_id=repo_id if args.use_lora else None,
+            train_base=args.train_base,
         )
 
         print("Training complete!")
