@@ -6,6 +6,7 @@ import sys
 import time
 from typing import List, Dict, Any, Optional, Tuple
 import copy
+from enum import Enum
 
 import torch
 from torch.nn import functional as F
@@ -15,6 +16,7 @@ from peft import LoraConfig, get_peft_model, PeftModel
 import wandb
 
 from datasets import Dataset
+from enums import ModelType
 
 # Import math problem generation and reward functions
 from functions import generate_math_problems, math_reward_func, parse_completion
@@ -343,7 +345,7 @@ class GRPOTrainer:
         minibatch_size: int = 1,
         save_steps: int = 0,
         repo_id: Optional[str] = None,
-        train_base: bool = False,
+        model_type: ModelType = ModelType.THINKING,
     ) -> Dict[str, Any]:
         """Train the model using GRPO.
         
@@ -361,7 +363,7 @@ class GRPOTrainer:
         minibatch_size : size of minibatches for optimization
         save_steps : number of optimization steps between saving LoRA checkpoints
         repo_id : Hugging Face Hub repository ID to push checkpoints to.
-        train_base : whether to use the base model prompt.
+        model_type : Type of model training.
         
         Returns
         -------
@@ -404,13 +406,13 @@ class GRPOTrainer:
                         max_new_tokens=max_new_tokens,
                         disable_adapter=False,
                         enable_thinking=False,
-                        train_base=train_base,
+                        model_type=model_type,
                     )
                     sample_time = time.time() - sample_start_time
                     print(f"  sample_and_revise took {sample_time:.2f}s")
                 else:
                     sample_start_time = time.time()
-                    batch = sample(self.model, tokenizer, rollouts_per_prompt=rollouts_per_prompt, prompts_per_generation=prompts_per_generation, max_new_tokens=max_new_tokens, train_base=train_base)
+                    batch = sample(self.model, tokenizer, rollouts_per_prompt=rollouts_per_prompt, prompts_per_generation=prompts_per_generation, max_new_tokens=max_new_tokens, model_type=model_type)
                     sample_time = time.time() - sample_start_time
                     print(f"  sample took {sample_time:.2f}s")
                 
@@ -752,7 +754,7 @@ def compute_sequence_advantages(rewards: torch.Tensor, prompts_per_generation: i
     return advantages_per_prompt.view(-1)
 
 
-def generate_and_decode(model, tokenizer, prompts, max_new_tokens, disable_adapter=False, enable_thinking: bool = True, train_base: bool = False, **gen_kwargs):
+def generate_and_decode(model, tokenizer, prompts, max_new_tokens, disable_adapter=False, enable_thinking: bool = True, model_type: ModelType = ModelType.THINKING, **gen_kwargs):
     """Generates completions from a model and decodes them.
 
     Parameters
@@ -769,8 +771,8 @@ def generate_and_decode(model, tokenizer, prompts, max_new_tokens, disable_adapt
         If True, temporarily disables PEFT adapters during generation when supported.
     enable_thinking : bool, optional
         If True, enables the chat template's "thinking" mode when available.
-    train_base : bool, optional
-        If True, uses prompts directly without applying a chat template.
+    model_type : str, optional
+        The type of model prompt to use.
     **gen_kwargs : Any
         Additional keyword arguments forwarded to `model.generate()`.
 
@@ -787,7 +789,7 @@ def generate_and_decode(model, tokenizer, prompts, max_new_tokens, disable_adapt
           Shape: `(batch_size, seq_len - 1)`.
     """
     
-    if train_base:
+    if model_type == ModelType.BASE:
         processed_prompts = prompts
     else:
         # Convert prompts to chat message format
@@ -869,7 +871,7 @@ def sample_and_revise(
     max_new_tokens: int, 
     disable_adapter: bool, 
     enable_thinking: bool,
-    train_base: bool = False,
+    model_type: ModelType = ModelType.THINKING,
 ):
     """Samples, revises, and evaluates completions.
 
@@ -922,7 +924,7 @@ def sample_and_revise(
     """
     # 1. First pass: Sample from the base model to get initial solutions
     _, _, _, _, prompts, initial_completions, numbers_list = sample(
-        model, tokenizer, rollouts_per_prompt, prompts_per_generation, max_new_tokens, train_base=train_base
+        model, tokenizer, rollouts_per_prompt, prompts_per_generation, max_new_tokens, model_type=model_type
     )
 
     # 2. Second pass: Construct revision prompts and revise with the revision_model
@@ -951,7 +953,7 @@ The revised completion should be in the format: <think>chain-of-thought</think> 
         max_new_tokens,
         disable_adapter=disable_adapter,
         enable_thinking=enable_thinking,
-        train_base=False,
+        model_type=ModelType.THINKING,
     )
 
     # Use revised final answers only if thinking mode is enabled, otherwise use original completions
@@ -962,7 +964,7 @@ The revised completion should be in the format: <think>chain-of-thought</think> 
         final_completions = revised_completions
     
     # Create the batch from prompts and generated completions
-    rewards = torch.tensor(math_reward_func(final_completions, prompts, numbers_list, train_base=train_base), dtype=torch.float32)
+    rewards = torch.tensor(math_reward_func(final_completions, prompts, numbers_list, model_type=model_type), dtype=torch.float32)
     advantages = compute_sequence_advantages(rewards, prompts_per_generation, rollouts_per_prompt)
     input_ids = revised_generated_ids
 
@@ -971,7 +973,7 @@ The revised completion should be in the format: <think>chain-of-thought</think> 
     return input_ids, rewards, advantages, loss_mask, prompts, final_completions, numbers_list
 
 
-def sample(model, tokenizer, rollouts_per_prompt: int = 4, prompts_per_generation: int = 1, max_new_tokens: int = 512, train_base: bool = False):
+def sample(model, tokenizer, rollouts_per_prompt: int = 4, prompts_per_generation: int = 1, max_new_tokens: int = 512, model_type: ModelType = ModelType.THINKING):
     """Generate a batch of math problems and model completions for GRPO training.
 
     This function first generates a set of unique math problems, then duplicates them
@@ -1012,7 +1014,7 @@ def sample(model, tokenizer, rollouts_per_prompt: int = 4, prompts_per_generatio
     """
     
     # Generate `prompts_per_generation` unique math problems
-    problem_generator = generate_math_problems(tokenizer, prompts_per_generation, train_base=train_base)
+    problem_generator = generate_math_problems(tokenizer, prompts_per_generation, model_type=model_type)
     unique_problems = list(problem_generator)
     
     # Duplicate each problem `rollouts_per_prompt` times
@@ -1023,10 +1025,11 @@ def sample(model, tokenizer, rollouts_per_prompt: int = 4, prompts_per_generatio
     numbers_list = [problem["numbers"] for problem in problems]
 
     # Generate completions using the model
-    completions, generated_ids, loss_mask = generate_and_decode(model, tokenizer, prompts, max_new_tokens, enable_thinking=True, train_base=train_base)
+    enable_thinking_flag = model_type == ModelType.THINKING
+    completions, generated_ids, loss_mask = generate_and_decode(model, tokenizer, prompts, max_new_tokens, enable_thinking=enable_thinking_flag, model_type=model_type)
     
     # Create the batch from prompts and generated completions
-    rewards = torch.tensor(math_reward_func(completions, prompts, numbers_list, train_base=train_base), dtype=torch.float32)
+    rewards = torch.tensor(math_reward_func(completions, prompts, numbers_list, model_type=model_type), dtype=torch.float32)
     advantages = compute_sequence_advantages(rewards, prompts_per_generation, rollouts_per_prompt)
     input_ids = generated_ids
 
@@ -1089,7 +1092,7 @@ def main():
     
     # Revision configuration
     parser.add_argument("--use_revision", action="store_true", default=False, help="Use revision model to revise completions during sampling.")
-    parser.add_argument("--train_base", action="store_true", default=False, help="Use prompt / config to train base model.")
+    parser.add_argument("--model_type", type=ModelType, default=ModelType.THINKING, choices=list(ModelType), help="Type of model training.")
     
     # Learning rate scheduler configuration
     parser.add_argument("--lr_schedule", action="store_true", default=True, help="Use linear learning rate decay")
@@ -1277,7 +1280,7 @@ def main():
             minibatch_size=args.minibatch_size,
             save_steps=args.save_steps,
             repo_id=repo_id if args.use_lora else None,
-            train_base=args.train_base,
+            model_type=args.model_type,
         )
 
         print("Training complete!")

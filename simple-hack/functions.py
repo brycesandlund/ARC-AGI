@@ -4,6 +4,8 @@ import random
 import re
 from typing import List, Dict, Any, Optional
 
+from enums import ModelType
+
 LOG_FREQUENCY = 1 # Print logs every 50 calls on average
 
 # Set a seed for reproducibility
@@ -159,7 +161,7 @@ def generate_problem(target, num_count=4, num_range=10):
     print(f"Warning: Could not generate valid problem for target {target} after {max_attempts} attempts")
     return None, None
 
-def generate_math_problems(tokenizer, dataset_size, train_base: bool = False):
+def generate_math_problems(tokenizer, dataset_size, model_type: ModelType):
     """
     Generator function that creates math problems using generate_problem.
     Yields dictionary with 'prompt' containing the problem description, formatted with thinking template.
@@ -175,7 +177,7 @@ def generate_math_problems(tokenizer, dataset_size, train_base: bool = False):
             # Create prompt similar to test_inference
             numbers_str = ", ".join(map(str, numbers))
 
-            if train_base:
+            if model_type == ModelType.BASE:
                 # # R1-ZERO PROMPT:
                 # prompt_content = (
                 #     "A conversation between User and Assistant. The user asks a question, and the Assistant solves it. "
@@ -218,7 +220,11 @@ def generate_math_problems(tokenizer, dataset_size, train_base: bool = False):
                 )
 
 
-            else:
+            elif model_type == ModelType.INSTRUCT:
+                # INSTRUCT-TUNED PROMPT (no thinking):
+                prompt_content = f"Using the numbers {numbers_str} exactly once in mathematical notation using addition, subtraction, multiplication, division, and/or parentheses, create an expression that equals {target}. Answer exactly in plain mathematical notation, WITH NO ADDITIONAL TEXT. For example, if the provided numbers are 8, 3, 2, 3, a valid answer would be: (3 / 3 + 2) * 8. Or, if the numbers were 8, 2, 9, 9, a valid answer would be 9 + 9 - 2 + 8. Do not include = {target} in your answer."
+
+            else: # Catches ModelType.THINKING
                 # REASONING-TRAINED PROMPT:
                 prompt_content = f"Using the numbers {numbers_str} exactly once in mathematical notation using addition, subtraction, multiplication, division, and/or parentheses, create an expression that equals {target}. Keep your reasoning in the <think> block brief. Answer exactly in plain mathematical notation (DO NOT USE LATEX), WITH NO ADDITIONAL TEXT. For example, if the provided numbers are 8, 3, 2, 3, a valid answer would be: (3 / 3 + 2) * 8. Or, if the numbers were 8, 2, 9, 9, a valid answer would be 9 + 9 - 2 + 8. ANSWER AS SOON AS A CORRECT EXPRESSION IS FOUND. Do not include = {target} in your answer."
             
@@ -262,7 +268,7 @@ def numbers_match(prompt_numbers, expression_numbers):
     # Sort both lists and compare
     return sorted(prompt_numbers) == sorted(expression_numbers)
 
-def math_reward_func(completions, prompts, numbers_list, train_base: bool = False, **kwargs):
+def math_reward_func(completions, prompts, numbers_list, model_type: ModelType, **kwargs):
     """
     Reward function that evaluates mathematical correctness using is_correct.
     
@@ -308,7 +314,7 @@ def math_reward_func(completions, prompts, numbers_list, train_base: bool = Fals
                 reward = 0.0  # Both wrong
         
         # If the answer isn't perfect, give partial credit for using the closing tag
-        if reward < 1.0 and train_base and "</think>" in completion:
+        if reward < 1.0 and model_type == ModelType.BASE and "</think>" in completion:
             reward = 0.2
             
         if random.random() < LOG_FREQUENCY:
