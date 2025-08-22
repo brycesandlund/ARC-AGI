@@ -327,49 +327,6 @@ class GRPOTrainer:
             "model_entropy": mean_entropy,
         }
 
-    def _run_evaluation(
-        self,
-        eval_dataset: Any,
-        tokenizer: Any,
-        max_new_tokens: int,
-        eval_type: str,
-        episode: int,
-        use_wandb: bool = False,
-        train_base: bool = False,
-    ) -> Dict[str, Any]:
-        """Run evaluation and log results.
-        
-        Parameters
-        ----------
-        eval_dataset : evaluation dataset
-        tokenizer : tokenizer for the model
-        max_new_tokens : maximum new tokens to generate
-        eval_type : "initial" or "final" for logging purposes
-        episode : current episode number for wandb logging
-        use_wandb : whether to log to wandb
-        train_base : whether to use the base model prompt.
-        
-        Returns
-        -------
-        Dict with evaluation metrics
-        """
-        self.model.eval()
-
-        print(f"\nRunning {eval_type} evaluation...")
-        metrics = evaluate_model(self.model, tokenizer, eval_dataset, max_new_tokens, train_base=train_base)
-        print(f"{eval_type.capitalize()} metrics: {metrics}")
-
-        if use_wandb:
-            wandb.log({
-                f"{eval_type}_eval/success_rate": metrics.get("eval_success_rate", 0),
-                f"{eval_type}_eval/reward_mean": metrics.get("eval_reward_mean", 0),
-                f"{eval_type}_eval/reward_std": metrics.get("eval_reward_std", 0),
-                f"{eval_type}_eval/avg_response_length": metrics.get("eval_avg_response_length", 0),
-                "episode": episode
-            }, step=episode)
-        
-        return metrics
-
     def train(
         self,
         tokenizer: Any,
@@ -380,7 +337,6 @@ class GRPOTrainer:
         prompts_per_generation: int,
         max_new_tokens: int,
         prompts_per_compute_loss: int = 1,
-        eval_dataset: Optional[Any] = None,
         use_wandb: bool = False,
         kl_threshold: float = 0.02,
         use_revision: bool = False,
@@ -399,7 +355,6 @@ class GRPOTrainer:
         epochs_per_batch : number of optimization epochs to run on each collected batch of experience
         rollouts_per_prompt : number of rollouts to generate for each prompt
         max_new_tokens : maximum new tokens to generate
-        eval_dataset : optional dataset for evaluation
         use_wandb : whether to log to wandb
         kl_threshold : KL divergence threshold for early stopping
         use_revision : whether to use revision model for sampling
@@ -415,10 +370,6 @@ class GRPOTrainer:
         total_optim_steps = 0
         training_rewards = []
         
-        # Initial evaluation if eval dataset provided
-        if eval_dataset is not None:
-            initial_metrics = self._run_evaluation(eval_dataset, tokenizer, max_new_tokens, "initial", 0, use_wandb, train_base=train_base)
-
         print("Starting GRPO training...")
 
         leftover_experience = []
@@ -698,23 +649,11 @@ class GRPOTrainer:
             if use_wandb:
                 wandb.log({"train/optimization_time": optimization_time, "collection_step": collection_step}, step=total_optim_steps)
 
-        # Final evaluation if eval dataset provided
-        if eval_dataset is not None:
-            final_metrics = self._run_evaluation(eval_dataset, tokenizer, max_new_tokens, "final", total_optim_steps, use_wandb, train_base=train_base)
-                
-            # Log training summary
-            if use_wandb and wandb.run is not None:
-                wandb.run.summary["total_steps"] = total_optim_steps
-                wandb.run.summary["final_success_rate"] = final_metrics.get("eval_success_rate", 0)
-                wandb.run.summary["improvement"] = final_metrics.get("eval_success_rate", 0) - initial_metrics.get("eval_success_rate", 0)
-
         print("Training complete!")
         
         return {
             "total_steps": total_optim_steps,
             "training_rewards": training_rewards,
-            "final_metrics": final_metrics if eval_dataset is not None else None,
-            "initial_metrics": initial_metrics if eval_dataset is not None else None,
         }
 
 
@@ -1094,73 +1033,6 @@ def sample(model, tokenizer, rollouts_per_prompt: int = 4, prompts_per_generatio
     return input_ids, rewards, advantages, loss_mask, prompts, completions
 
 
-def evaluate_model(model, tokenizer, eval_dataset, max_new_tokens=512, batch_size=12, train_base: bool = False):
-    """Batched evaluation that uses the same chat templating and generation path as training."""
-
-    model.eval()
-    total_reward = 0.0
-    total_samples = 0
-    success_count = 0
-    total_response_length = 0.0
-    all_rewards = []
-
-    # Convert dataset to list if it's not already
-    eval_samples = list(eval_dataset)
-
-    # Process evaluation dataset in batches
-    for i in range(0, len(eval_samples), batch_size):
-        batch_samples = eval_samples[i:i + batch_size]
-        batch_prompts = [sample["query"] for sample in batch_samples]
-
-        # Use the unified generation path (with chat template) for consistency
-        completions, generated_ids, _ = generate_and_decode(
-            model,
-            tokenizer,
-            batch_prompts,
-            max_new_tokens,
-            enable_thinking=True,
-            train_base=train_base,
-        )
-
-        # Re-tokenize prompts to get prompt lengths for response length calculation
-        tokenized_input = tokenizer(batch_prompts, return_tensors="pt", padding=True, truncation=True)
-        prompt_lengths = (tokenized_input.input_ids != PAD_TOKEN_ID).sum(dim=1)
-        batch_response_lengths = []
-        for row_idx in range(generated_ids.size(0)):
-            prompt_len = prompt_lengths[row_idx].item()
-            response_ids = generated_ids[row_idx, prompt_len:]
-            response_len = (response_ids != PAD_TOKEN_ID).sum().item()
-            batch_response_lengths.append(response_len)
-
-        # Calculate rewards for the batch
-        batch_rewards = math_reward_func(completions, batch_prompts)
-        all_rewards.extend(batch_rewards)
-
-        # Accumulate statistics
-        total_response_length += float(sum(batch_response_lengths))
-        for reward in batch_rewards:
-            total_reward += reward
-            total_samples += 1
-            if reward > 0:
-                success_count += 1
-
-    # Calculate metrics
-    avg_reward = total_reward / total_samples if total_samples > 0 else 0.0
-    reward_std = (
-        torch.tensor(all_rewards, dtype=torch.float32).std().item() if total_samples > 0 else 0.0
-    )
-    success_rate = success_count / total_samples if total_samples > 0 else 0.0
-    avg_response_length = total_response_length / total_samples if total_samples > 0 else 0.0
-
-    return {
-        "eval_reward_mean": avg_reward,
-        "eval_reward_std": reward_std,
-        "eval_success_rate": success_rate,
-        "eval_avg_response_length": avg_response_length,
-        "eval_samples": total_samples,
-    }
-
-
 # ---------------------------------------------------------------------------
 # Main training loop
 # ---------------------------------------------------------------------------
@@ -1208,7 +1080,6 @@ def main():
     parser.add_argument("--use_wandb", action="store_true", default=True, help="Use Weights & Biases for logging")
     parser.add_argument("--wandb_project", type=str, default="grpo-math-training", help="W&B project name")
     parser.add_argument("--wandb_run_name", type=str, default="custom-grpo", help="W&B run name")
-    parser.add_argument("--eval_size", type=int, default=10, help="Number of problems for evaluation")
         
     # KL threshold configuration
     parser.add_argument("--kl_threshold", type=float, default=10, help="KL divergence threshold for early stopping")
@@ -1387,23 +1258,8 @@ def main():
         else:
             print("Training full model. Consider using --use_lora for better memory efficiency.")
         
-        # Create eval dataset once for reuse
-        print(f"Creating evaluation dataset with {args.eval_size} problems...")
-        
-        # Generate data for evaluation
-        eval_data = []
-        problem_generator = generate_math_problems(tokenizer, args.eval_size, train_base=args.train_base)
-        for problem in problem_generator:
-            eval_data.append({
-                "query": problem["prompt"],
-                "target": problem["target"],
-                "numbers": problem["numbers"]
-            })
-        
-        eval_dataset = Dataset.from_list(eval_data)
-        
         # Run training using the new train method
-        training_results = trainer.train(
+        trainer.train(
             tokenizer=tokenizer,
             collection_steps=collection_steps,
             batch_size=args.batch_size,
@@ -1412,7 +1268,6 @@ def main():
             prompts_per_generation=args.prompts_per_generation,
             max_new_tokens=args.max_new_tokens,
             prompts_per_compute_loss=args.prompts_per_compute_loss,
-            eval_dataset=eval_dataset,
             use_wandb=args.use_wandb,
             kl_threshold=args.kl_threshold,
             use_revision=args.use_revision,
