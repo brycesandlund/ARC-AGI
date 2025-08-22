@@ -872,6 +872,13 @@ def generate_and_decode(model, tokenizer, prompts, max_new_tokens, disable_adapt
         ]
 
     tokenized = tokenizer(processed_prompts, return_tensors="pt", padding=True, truncation=True)
+
+    print("HERE MOTHERFUCKER")
+    print(tokenized)
+    print(tokenized["input_ids"])
+    print("\n")
+    print(tokenizer.batch_decode(tokenized["input_ids"]))
+    print("NEXT PART MOTHERFUCKER")
     
     # Base generation arguments
     base_gen_kwargs = {
