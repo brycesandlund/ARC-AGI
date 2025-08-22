@@ -37,8 +37,8 @@ def parse_completion(completion: str) -> tuple[str, str]:
         if start_tag_pos != -1:
             thinking_content = think_part[start_tag_pos + len(start_tag):].strip()
         else:
-            # Fallback if no start tag is found before the end tag
-            thinking_content = ""
+            # If no start tag is found, assume everything before the end tag is thinking.
+            thinking_content = think_part.strip()
         
         return thinking_content, content
     
@@ -164,11 +164,11 @@ def generate_math_problems(tokenizer, dataset_size, train_base: bool = False):
     Generator function that creates math problems using generate_problem.
     Yields dictionary with 'prompt' containing the problem description, formatted with thinking template.
     """
-    targets = [24]  # Various target numbers
+    targets = [16]  # Various target numbers
     
     for _ in range(dataset_size):
         target = random.choice(targets)
-        numbers, expression = generate_problem(target, num_count=4, num_range=10)
+        numbers, expression = generate_problem(target, num_count=3, num_range=10)
         
         if numbers and expression:  # Only yield if we successfully generated a problem
             # Create prompt similar to test_inference
@@ -176,20 +176,47 @@ def generate_math_problems(tokenizer, dataset_size, train_base: bool = False):
 
             if train_base:
                 # # R1-ZERO PROMPT:
+                # prompt_content = (
+                #     "A conversation between User and Assistant. The user asks a question, and the Assistant solves it. "
+                #     "The assistant first thinks about the reasoning process in the <think></think> tags and then provides the user with the answer.\n"
+                #     f"User: Using the numbers {numbers_str} exactly once in mathematical notation using addition, "
+                #     f"subtraction, multiplication, division, and/or parentheses, create an expression that equals {target}."
+                #     "Show your work in <think> </think> tags. Output your answer after closing the </think> tag WITH NO ADDITIONAL TEXT.For example, if the provided numbers are 8, 3, 2, 3, a valid response would be Assistant: <think> Let me solve this step by step. Hm, maybe I can use 3 / 3 + 2 to get 3. Then I can multiply that by 8 to get 24. </think>(3 / 3 + 2) * 8.\n"
+                #     "Assistant: <think> Let me solve this step by step. "
+                # )
+
+
+
+                # prompt_content = (
+                #     f"SYSTEM: Using the numbers 8, 3, 2, 3, exactly once in mathematical notation using addition, subtraction, multiplication, division, and/or parentheses, create an expression that equals {target}. Show your"
+                #     "work in the <think> </think> tags. Answer exactly in plain mathematical notation, WITH NO ADDITIONAL TEXT. \n\n"
+                #     "ASSISTANT: <think> Let me solve this step by step. \n\nHm, maybe I can use 3 / 3 + 2 to get 3. Then I can multiply that by 8 to get 24. </think>(3 / 3 + 2) * 8.\n\n"
+                #     f"SYSTEM: Using the numbers 4, 1, 8, 8, exactly once in mathematical notation using addition, subtraction, multiplication, division, and/or parentheses, create an expression that equals {target}. Show your"
+                #     "work in the <think> </think> tags. Answer exactly in plain mathematical notation, WITH NO ADDITIONAL TEXT. \n\n"
+                #     "ASSISTANT: <think> Let me solve this step by step. \n\nOkay, let's see. I need to use the numbers 4, 1, 8, 8 exactly once each with basic operations to make 24. 8 * 4 = 32. Then 32 minus something. If I can get 8 from 1 and 8. Wait, 8 - (8/ something). Wait, 8 - (8/ something). But I already used one 8 in 8*4. So maybe 8*4 - (8 - 1) = 32 -7=25. Close, but no. How about 8*4 - (8/(1))? That's 32 -8=24. Wait! Let me check. 8 multiplied by 4 is 32. Then 8 divided by 1 is 8. So 32 -8=24. And we've used 8, 4, 8, and 1. Exactly once each. So that works! </think>8 * 4 - 8 / 1\n"
+                #     f"SYSTEM: Using the numbers 3, 9, 6, 2, exactly once in mathematical notation using addition, subtraction, multiplication, division, and/or parentheses, create an expression that equals {target}. Show your"
+                #     "work in the <think> </think> tags. Answer exactly in plain mathematical notation, WITH NO ADDITIONAL TEXT. \n\n"
+                #     "ASSISTANT: <think> Let me solve this step by step. \n\n6 * 4 = 24. How to get 4 from 3, 9, 2? 9 - 3 - 2 = 4. Yes! So 6 * (9 - 3 - 2) = 6 * 4 = 24. Let me check: 9-3=6, 6-2=4. Then 6*4=24. And we've used 6, 9, 3, 2. All four numbers exactly once. Perfect! </think>6*(9-3-2)\n"
+                #     f"SYSTEM: Using the numbers {numbers_str} exactly once in mathematical notation using addition, subtraction, multiplication, division, and/or parentheses, create an expression that equals {target}. Show your"
+                #     "work in the <think> </think> tags. Answer exactly in plain mathematical notation, WITH NO ADDITIONAL TEXT. \n\n"
+                #     "ASSISTANT: <think> Let me solve this step by step. \n\n"
+                # )
+
+
+
                 prompt_content = (
-                    "A conversation between User and Assistant. The user asks a question, and the Assistant solves it. "
-                    "The assistant first thinks about the reasoning process in the <think></think> tags and then provides the user with the answer.\n"
-                    f"User: Using the numbers {numbers_str} exactly once in mathematical notation using addition, "
-                    f"subtraction, multiplication, division, and/or parentheses, create an expression that equals {target}."
-                    "Show your work in <think> </think> tags. Output your answer after closing the </think> tag WITH NO ADDITIONAL TEXT.For example, if the provided numbers are 8, 3, 2, 3, a valid response would be Assistant: <think> Let me solve this step by step. Hm, maybe I can use 3 / 3 + 2 to get 3. Then I can multiply that by 8 to get 24. </think>(3 / 3 + 2) * 8.\n"
-                    "Assistant: <think> Let me solve this step by step. "
+                    f"SYSTEM: Using the numbers 2, 3, 10 exactly once in mathematical notation using addition, subtraction, multiplication, division, and/or parentheses, create an expression that equals {target}. Show your"
+                    "work in the <think> </think> tags. Answer exactly in plain mathematical notation, WITH NO ADDITIONAL TEXT. \n\n"
+                    "ASSISTANT: <think> Let me solve this step by step. Hm, 2+3 = 6. and 6+10 = 16. That's it!</think>2+3+10\n\n"
+                    f"SYSTEM: Using the numbers 4, 8, 16 exactly once in mathematical notation using addition, subtraction, multiplication, division, and/or parentheses, create an expression that equals {target}. Show your"
+                    "work in the <think> </think> tags. Answer exactly in plain mathematical notation, WITH NO ADDITIONAL TEXT. \n\n"
+                    "ASSISTANT: <think> Let me solve this step by step. Hm, 8*4 = 32. Then 32 - 16 = 16.</think>8*4-16\n\n"
+                    f"SYSTEM: Using the numbers {numbers_str} exactly once in mathematical notation using addition, subtraction, multiplication, division, and/or parentheses, create an expression that equals {target}. Show your"
+                    "work in the <think> </think> tags. Answer exactly in plain mathematical notation, WITH NO ADDITIONAL TEXT. \n\n"
+                    "ASSISTANT: <think> Let me solve this step by step. \n\n"
                 )
-                # prompt_content = f"SYSTEM: Using the numbers {numbers_str} exactly once in mathematical notation using addition, subtraction, multiplication, division, and/or parentheses, create an expression that equals {target}. Show your"
-                # "work in the <think> </think> tags. Answer exactly in plain mathematical notation, WITH NO" 
-                # "ADDITIONAL TEXT. \n"
-                
-                # "ASSISTANT: <think> Let me solve this step by step. </think> "
-                # For example, if the provided numbers are 8, 3, 2, 3, a valid answer would be: (3 / 3 + 2) * 8. Or, if the numbers were 8, 2, 9, 9, a valid answer would be 9 + 9 - 2 + 8. ANSWER AS SOON AS A CORRECT EXPRESSION IS FOUND. Do not include = {target} in your answer."
+
+
             else:
                 # REASONING-TRAINED PROMPT:
                 prompt_content = f"Using the numbers {numbers_str} exactly once in mathematical notation using addition, subtraction, multiplication, division, and/or parentheses, create an expression that equals {target}. Keep your reasoning in the <think> block brief. Answer exactly in plain mathematical notation (DO NOT USE LATEX), WITH NO ADDITIONAL TEXT. For example, if the provided numbers are 8, 3, 2, 3, a valid answer would be: (3 / 3 + 2) * 8. Or, if the numbers were 8, 2, 9, 9, a valid answer would be 9 + 9 - 2 + 8. ANSWER AS SOON AS A CORRECT EXPRESSION IS FOUND. Do not include = {target} in your answer."

@@ -812,12 +812,12 @@ def generate_and_decode(model, tokenizer, prompts, max_new_tokens, disable_adapt
 
     tokenized = tokenizer(processed_prompts, return_tensors="pt", padding=True, truncation=True)
 
-    print("HERE MOTHERFUCKER")
-    print(tokenized)
-    print(tokenized["input_ids"])
-    print("\n")
-    print(tokenizer.batch_decode(tokenized["input_ids"]))
-    print("NEXT PART MOTHERFUCKER")
+    # print("HERE MOTHERFUCKER")
+    # print(tokenized)
+    # print(tokenized["input_ids"])
+    # print("\n")
+    # print(tokenizer.batch_decode(tokenized["input_ids"]))
+    # print("NEXT PART MOTHERFUCKER")
     
     # Base generation arguments
     base_gen_kwargs = {
@@ -843,15 +843,15 @@ def generate_and_decode(model, tokenizer, prompts, max_new_tokens, disable_adapt
     is_pad_tensor = (generated_ids == PAD_TOKEN_ID)
     is_eos_tensor = (generated_ids == EOS_TOKEN_ID)
     
-    torch.set_printoptions(threshold=10_000, linewidth=200)
-    print("Generated IDs shape:", generated_ids.shape)
-    print("Pad token ID:", PAD_TOKEN_ID)
-    print("EOS token ID:", EOS_TOKEN_ID)
-    print("is_pad_tensor (generated_ids == PAD_TOKEN_ID):")
-    print(is_pad_tensor)
-    print("is_eos_tensor (generated_ids == EOS_TOKEN_ID):")
-    print(is_eos_tensor)
-    print(tokenizer.batch_decode(generated_ids))
+    # torch.set_printoptions(threshold=10_000, linewidth=200)
+    # print("Generated IDs shape:", generated_ids.shape)
+    # print("Pad token ID:", PAD_TOKEN_ID)
+    # print("EOS token ID:", EOS_TOKEN_ID)
+    # print("is_pad_tensor (generated_ids == PAD_TOKEN_ID):")
+    # print(is_pad_tensor)
+    # print("is_eos_tensor (generated_ids == EOS_TOKEN_ID):")
+    # print(is_eos_tensor)
+    # print(tokenizer.batch_decode(generated_ids))
         
     # Extract, decode, and return completions using token-based slicing.
     completions, loss_mask = _extract_completions_and_create_loss_mask(tokenizer, generated_ids, tokenized["input_ids"])
