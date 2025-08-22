@@ -220,27 +220,6 @@ def extract_numbers_from_expression(expression):
     # Convert to integers (assuming we're working with integers based on the problem setup)
     return [int(float(num)) for num in numbers]
 
-def extract_numbers_from_prompt(prompt):
-    """
-    Extracts the list of numbers from the prompt.
-    
-    Args:
-        prompt (str): The prompt containing the numbers
-        
-    Returns:
-        list: List of numbers specified in the prompt
-    """
-    # Look for pattern "Using the numbers X, Y, Z, ..." in the prompt
-    match = re.search(r'Using the numbers ([\d,\s]+)', prompt)
-    
-    if match:
-        numbers_str = match.group(1)
-        # Split by comma and convert to integers
-        numbers = [int(num.strip()) for num in numbers_str.split(',')]
-        return numbers
-    
-    return []
-
 def numbers_match(prompt_numbers, expression_numbers):
     """
     Checks if the numbers used in the expression exactly match those specified in the prompt.
@@ -255,13 +234,14 @@ def numbers_match(prompt_numbers, expression_numbers):
     # Sort both lists and compare
     return sorted(prompt_numbers) == sorted(expression_numbers)
 
-def math_reward_func(completions, prompts, **kwargs):
+def math_reward_func(completions, prompts, numbers_list, **kwargs):
     """
     Reward function that evaluates mathematical correctness using is_correct.
     
     Args:
         completions: List of generated completions
         prompts: List of prompts (to extract target values)
+        numbers_list: List of lists of numbers used in prompts
         **kwargs: Additional arguments
         
     Returns:
@@ -269,7 +249,7 @@ def math_reward_func(completions, prompts, **kwargs):
     """
     rewards = []
     
-    for completion, prompt in zip(completions, prompts):
+    for completion, prompt, prompt_numbers in zip(completions, prompts, numbers_list):
         # Extract target from prompt
         # Look for "equals X" pattern in the prompt
         target_match = re.search(r'equals (\d+)', prompt)
@@ -282,8 +262,7 @@ def math_reward_func(completions, prompts, **kwargs):
         if target_match:
             target = float(target_match.group(1))
             
-            # Extract numbers from prompt and expression
-            prompt_numbers = extract_numbers_from_prompt(prompt)
+            # Extract numbers from expression
             expression_numbers = extract_numbers_from_expression(content)
             
             # Check both mathematical correctness and number usage
@@ -309,9 +288,9 @@ def math_reward_func(completions, prompts, **kwargs):
             print(f"Prompt: {prompt}")
             print(f"Completion: {completion}")
             print(f"Parsed Content: {content}")
-            print(f"Prompt Numbers: {extract_numbers_from_prompt(prompt) if target_match else 'N/A'}")
+            print(f"Prompt Numbers: {prompt_numbers if target_match else 'N/A'}")
             print(f"Expression Numbers: {extract_numbers_from_expression(content) if target_match else 'N/A'}")
-            print(f"Numbers Match: {numbers_match(extract_numbers_from_prompt(prompt), extract_numbers_from_expression(content)) if target_match else 'N/A'}")
+            print(f"Numbers Match: {numbers_match(prompt_numbers, extract_numbers_from_expression(content)) if target_match else 'N/A'}")
             print(f"Reward: {reward}")
             print("-----")
             

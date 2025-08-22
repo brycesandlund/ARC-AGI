@@ -414,7 +414,7 @@ class GRPOTrainer:
                     sample_time = time.time() - sample_start_time
                     print(f"  sample took {sample_time:.2f}s")
                 
-                input_ids, rewards, advantages, loss_mask, _, _ = batch
+                input_ids, rewards, advantages, loss_mask, _, _, _ = batch
 
                 # Split tensors
                 input_ids_chunks = torch.split(input_ids, rollouts_per_prompt)
@@ -904,7 +904,7 @@ def sample_and_revise(
 
     Returns
     -------
-    Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, List[str], List[str]]
+    Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, List[str], List[str], List[List[int]]]
         A tuple containing the data from the *revised* completions:
         - input_ids (torch.Tensor): The full token sequences of the *revised*
           completions (revision prompt + revised completion), padded.
@@ -918,9 +918,10 @@ def sample_and_revise(
           Shape: `(prompts_per_generation * rollouts_per_prompt, padded_revised_sequence_length - 1)`
         - prompts (List[str]): The list of original prompts (from the first pass).
         - final_completions (List[str]): The list of decoded *revised* completions.
+        - numbers_list (List[List[int]]): The list of numbers for each prompt.
     """
     # 1. First pass: Sample from the base model to get initial solutions
-    _, _, _, _, prompts, initial_completions = sample(
+    _, _, _, _, prompts, initial_completions, numbers_list = sample(
         model, tokenizer, rollouts_per_prompt, prompts_per_generation, max_new_tokens, train_base=train_base
     )
 
@@ -961,13 +962,13 @@ The revised completion should be in the format: <think>chain-of-thought</think> 
         final_completions = revised_completions
     
     # Create the batch from prompts and generated completions
-    rewards = torch.tensor(math_reward_func(final_completions, prompts), dtype=torch.float32)
+    rewards = torch.tensor(math_reward_func(final_completions, prompts, numbers_list), dtype=torch.float32)
     advantages = compute_sequence_advantages(rewards, prompts_per_generation, rollouts_per_prompt)
     input_ids = revised_generated_ids
 
     # The loss mask is now directly returned from generate_and_decode
     
-    return input_ids, rewards, advantages, loss_mask, prompts, final_completions
+    return input_ids, rewards, advantages, loss_mask, prompts, final_completions, numbers_list
 
 
 def sample(model, tokenizer, rollouts_per_prompt: int = 4, prompts_per_generation: int = 1, max_new_tokens: int = 512, train_base: bool = False):
@@ -993,7 +994,7 @@ def sample(model, tokenizer, rollouts_per_prompt: int = 4, prompts_per_generatio
 
     Returns
     -------
-    Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, List[str], List[str]]
+    Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, List[str], List[str], List[List[int]]]
         A tuple containing:
         - input_ids (torch.Tensor): The full token sequences (prompt + completion),
           padded to the same length.
@@ -1007,6 +1008,7 @@ def sample(model, tokenizer, rollouts_per_prompt: int = 4, prompts_per_generatio
           Shape: `(prompts_per_generation * rollouts_per_prompt, padded_sequence_length - 1)`
         - prompts (List[str]): The list of prompts used for generation.
         - completions (List[str]): The list of decoded model completions.
+        - numbers_list (List[List[int]]): The list of numbers for each prompt.
     """
     
     # Generate `prompts_per_generation` unique math problems
@@ -1018,19 +1020,20 @@ def sample(model, tokenizer, rollouts_per_prompt: int = 4, prompts_per_generatio
     
     # Extract prompts
     prompts = [problem["prompt"] for problem in problems]
+    numbers_list = [problem["numbers"] for problem in problems]
 
     # Generate completions using the model
     completions, generated_ids, loss_mask = generate_and_decode(model, tokenizer, prompts, max_new_tokens, enable_thinking=True, train_base=train_base)
     
     # Create the batch from prompts and generated completions
-    rewards = torch.tensor(math_reward_func(completions, prompts), dtype=torch.float32)
+    rewards = torch.tensor(math_reward_func(completions, prompts, numbers_list), dtype=torch.float32)
     advantages = compute_sequence_advantages(rewards, prompts_per_generation, rollouts_per_prompt)
     input_ids = generated_ids
 
     # test_sample(input_ids, rewards, advantages, loss_mask, prompts, completions, rollouts_per_prompt, prompts_per_generation)
     # debug_batch_and_actions(tokenizer, input_ids, loss_mask, context="Data Sampling")
 
-    return input_ids, rewards, advantages, loss_mask, prompts, completions
+    return input_ids, rewards, advantages, loss_mask, prompts, completions, numbers_list
 
 
 # ---------------------------------------------------------------------------
