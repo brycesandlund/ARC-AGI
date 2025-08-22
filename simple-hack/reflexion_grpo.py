@@ -935,13 +935,18 @@ def sample_and_revise(
         # Here, we will just pass a placeholder since the prompt is about revision.
         # A more advanced implementation could use the reward to guide revision.
                 
+        if model_type == ModelType.THINKING:
+            start_tag, end_tag = "<think>", "</think>"
+        else:
+            start_tag, end_tag = "<reasoning>", "</reasoning>"
+
         revision_prompt = f"""The following is a solution to a math problem.
 Problem and solution:
 "{full_sequence_text}"
 
-Your task is to revise the chain-of-thought (content in <think> tags) to be more concise and possibly change/complete the final answer. Keep all tokens in the chain-of-thought that are helpful to achieving the correct answer. Eliminate dead ends.
+Your task is to revise the chain-of-thought (content in {start_tag} tags) to be more concise and possibly change/complete the final answer. Keep all tokens in the chain-of-thought that are helpful to achieving the correct answer. Eliminate dead ends.
 
-The revised completion should be in the format: <think>chain-of-thought</think> answer.
+The revised completion should be in the format: {start_tag}chain-of-thought{end_tag} answer.
 """
         revision_prompts.append(revision_prompt)
     
@@ -1157,6 +1162,8 @@ def main():
 
     print(f"Tokenizer pad token: '{tokenizer.pad_token}' (ID: {tokenizer.pad_token_id})")
     print(f"Tokenizer EOS token: '{tokenizer.eos_token}' (ID: {tokenizer.eos_token_id})")
+
+    # print(len(tokenizer("<reasoning>")["input_ids"]))
 
     print(f"CUDA available: {torch.cuda.is_available()}")
     if torch.cuda.is_available():

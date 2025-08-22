@@ -11,19 +11,24 @@ LOG_FREQUENCY = 1 # Print logs every 50 calls on average
 # Set a seed for reproducibility
 random.seed(42)
 
-def parse_completion(completion: str) -> tuple[str, str]:
+def parse_completion(completion: str, model_type: ModelType) -> tuple[str, str]:
     """
-    Parses a completion string that may contain <think>...</think> blocks.
-    Extracts thinking content and the final answer.
+    Parses a completion string that may contain <think>...</think> or <reasoning>...</reasoning> blocks.
+    Extracts thinking/reasoning content and the final answer.
     
     Args:
         completion (str): The model's completion string.
+        model_type (ModelType): The type of model, which determines the tags to use.
         
     Returns:
         tuple[str, str]: A tuple of (thinking_content, final_content).
     """
-    end_tag = '</think>'
-    start_tag = '<think>'
+    if model_type == ModelType.THINKING:
+        start_tag = '<think>'
+        end_tag = '</think>'
+    else:
+        start_tag = '<reasoning>'
+        end_tag = '</reasoning>'
     
     end_tag_pos = completion.rfind(end_tag)
     
@@ -31,8 +36,6 @@ def parse_completion(completion: str) -> tuple[str, str]:
         content = completion[end_tag_pos + len(end_tag):].strip()
         
         # Extract thinking content
-        # The thinking content is between <think> and </think>
-        # We look for the last <think> before the last </think>
         think_part = completion[:end_tag_pos]
         start_tag_pos = think_part.rfind(start_tag)
         
@@ -44,7 +47,7 @@ def parse_completion(completion: str) -> tuple[str, str]:
         
         return thinking_content, content
     
-    # No </think> tag found
+    # No end tag found
     return "", ""
 
 def is_correct(content, target):
@@ -208,15 +211,21 @@ def generate_math_problems(tokenizer, dataset_size, model_type: ModelType):
 
 
                 prompt_content = (
-                    f"SYSTEM: Using the numbers 2, 8, 10 exactly once in mathematical notation using addition, subtraction, multiplication, division, and/or parentheses, create an expression that equals {target}. Show your "
-                    "work in the <think> </think> tags. Answer exactly in plain mathematical notation, WITH NO ADDITIONAL TEXT. \n\n"
-                    "ASSISTANT: <think> Let me solve this step by step. \n\n Hm, 10+8=18. and 18-2=16. That's it!</think>10+8-2\n\n"
-                    f"SYSTEM: Using the numbers 10, 6 exactly once in mathematical notation using addition, subtraction, multiplication, division, and/or parentheses, create an expression that equals {target}. Show your "
-                    "work in the <think> </think> tags. Answer exactly in plain mathematical notation, WITH NO ADDITIONAL TEXT. \n\n"
-                    "ASSISTANT: <think> Let me solve this step by step. \n\n Hm, 10+6 = 16.</think>10+6\n\n"
-                    f"SYSTEM: Using the numbers {numbers_str} exactly once in mathematical notation using addition, subtraction, multiplication, division, and/or parentheses, create an expression that equals {target}. Show your "
-                    "work in the <think> </think> tags. Answer exactly in plain mathematical notation, WITH NO ADDITIONAL TEXT. \n\n"
-                    "ASSISTANT: <think> Let me solve this step by step. \n\n"
+                    f"Q: Using the numbers 2, 8, 10 exactly once in mathematical notation using addition, subtraction, multiplication, division, and/or parentheses, create an expression that equals {target}. Show your "
+                    "work in the <reasoning> </reasoning> tags. \n\n"
+                    "A: \n<reasoning> Let me solve this step by step. Hm, 10+8=18. and 18-2=16. That's it!</think>10+8-2\n\n"
+                    f"Q: Using the numbers 10, 6 exactly once in mathematical notation using addition, subtraction, multiplication, division, and/or parentheses, create an expression that equals {target}. Show your "
+                    "work in the <reasoning> </reasoning> tags. \n\n"
+                    "A: \n<reasoning> Let me solve this step by step. Hm, 10+6 = 16.</think>10+6\n\n"
+                    f"Q: Using the numbers 4, 3, 4 exactly once in mathematical notation using addition, subtraction, multiplication, division, and/or parentheses, create an expression that equals {target}. Show your "
+                    "work in the <reasoning> </reasoning> tags. \n\n"
+                    "A: \n<reasoning> Let me solve this step by step. Hm, 4*3 = 12. And 12+4=16.</think>4*3+4\n\n"
+                    f"Q: Using the numbers 9, 2, 5, 3 exactly once in mathematical notation using addition, subtraction, multiplication, division, and/or parentheses, create an expression that equals {target}. Show your "
+                    "work in the <reasoning> </reasoning> tags. \n\n"
+                    "A: \n<reasoning> Let me solve this step by step. Hm, 5*2 = 10. And 9-3=6.</think>5*2+9-3\n\n"
+                    f"Q: Using the numbers {numbers_str} exactly once in mathematical notation using addition, subtraction, multiplication, division, and/or parentheses, create an expression that equals {target}. Show your "
+                    "work in the <reasoning> </reasoning> tags. \n\n"
+                    "A: \n"
                 )
 
                 # prompt_content = (
@@ -311,7 +320,7 @@ def math_reward_func(completions, prompts, numbers_list, model_type: ModelType, 
         target_match = re.search(r'equals (\d+)', prompt)
         
         # Clean the completion and check if it's correct
-        _, content = parse_completion(completion)
+        _, content = parse_completion(completion, model_type=model_type)
 
         reward = 0.0  # Default to 0
         
@@ -336,12 +345,19 @@ def math_reward_func(completions, prompts, numbers_list, model_type: ModelType, 
                 reward = 0.0  # Both wrong
         
         # If the answer isn't perfect, give partial credit for using thinking tags
-        if reward < 1.0 and model_type != ModelType.THINKING:
+        if reward < 1.0:
             partial_reward = 0.0
-            if "<think>" in completion:
+            if model_type == ModelType.THINKING:
+                start_tag, end_tag = "<think>", "</think>"
+            else:
+                start_tag, end_tag = "<reasoning>", "</reasoning>"
+
+            if start_tag in completion:
                 partial_reward += 0.1
-            if "</think>" in completion:
+            if end_tag in completion:
                 partial_reward += 0.1
+            # if f"16" in completion:
+            #     partial_reward += 0.05
             reward = partial_reward
             
         if random.random() < LOG_FREQUENCY:
