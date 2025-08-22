@@ -252,8 +252,8 @@ def generate_math_problems(tokenizer, dataset_size, train_base: bool = False):
                     "The assistant first thinks about the reasoning process in the <think></think> tags and then provides the user with the answer.\n"
                     f"User: Using the numbers {numbers_str} exactly once in mathematical notation using addition, "
                     f"subtraction, multiplication, division, and/or parentheses, create an expression that equals {target}."
-                    "Show your work in <think> </think> tags. Output your answer after closing the </think> tag WITH NO ADDITIONAL TEXT.For example, if the provided numbers are 8, 3, 2, 3, a valid response would be Assistant: <think> Hm, maybe I can use 3 / 3 + 2 to get 3. Then I can multiply that by 8 to get 24. </think>(3 / 3 + 2) * 8.\n"
-                    "Assistant: "
+                    "Show your work in <think> </think> tags. Output your answer after closing the </think> tag WITH NO ADDITIONAL TEXT.For example, if the provided numbers are 8, 3, 2, 3, a valid response would be Assistant: <think> Let me solve this step by step. Hm, maybe I can use 3 / 3 + 2 to get 3. Then I can multiply that by 8 to get 24. </think>(3 / 3 + 2) * 8.\n"
+                    "Assistant: <think> Let me solve this step by step. "
                 )
             else:
                 # REASONING-TRAINED PROMPT:
