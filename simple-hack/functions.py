@@ -168,7 +168,8 @@ def generate_math_problems(tokenizer, dataset_size, train_base: bool = False):
     
     for _ in range(dataset_size):
         target = random.choice(targets)
-        numbers, expression = generate_problem(target, num_count=3, num_range=10)
+        num_count = random.choice([2, 3, 4])
+        numbers, expression = generate_problem(target, num_count=num_count, num_range=10)
         
         if numbers and expression:  # Only yield if we successfully generated a problem
             # Create prompt similar to test_inference
@@ -205,12 +206,12 @@ def generate_math_problems(tokenizer, dataset_size, train_base: bool = False):
 
 
                 prompt_content = (
-                    f"SYSTEM: Using the numbers 2, 3, 10 exactly once in mathematical notation using addition, subtraction, multiplication, division, and/or parentheses, create an expression that equals {target}. Show your"
+                    f"SYSTEM: Using the numbers 2, 8, 10 exactly once in mathematical notation using addition, subtraction, multiplication, division, and/or parentheses, create an expression that equals {target}. Show your"
                     "work in the <think> </think> tags. Answer exactly in plain mathematical notation, WITH NO ADDITIONAL TEXT. \n\n"
-                    "ASSISTANT: <think> Let me solve this step by step. Hm, 2+3 = 6. and 6+10 = 16. That's it!</think>2+3+10\n\n"
-                    f"SYSTEM: Using the numbers 4, 8, 16 exactly once in mathematical notation using addition, subtraction, multiplication, division, and/or parentheses, create an expression that equals {target}. Show your"
+                    "ASSISTANT: <think> Let me solve this step by step. Hm, 10+8=18. and 18-2=16. That's it!</think>10+8-2\n\n"
+                    f"SYSTEM: Using the numbers 10, 6 exactly once in mathematical notation using addition, subtraction, multiplication, division, and/or parentheses, create an expression that equals {target}. Show your"
                     "work in the <think> </think> tags. Answer exactly in plain mathematical notation, WITH NO ADDITIONAL TEXT. \n\n"
-                    "ASSISTANT: <think> Let me solve this step by step. Hm, 8*4 = 32. Then 32 - 16 = 16.</think>8*4-16\n\n"
+                    "ASSISTANT: <think> Let me solve this step by step. Hm, 10+6 = 16.</think>10+6\n\n"
                     f"SYSTEM: Using the numbers {numbers_str} exactly once in mathematical notation using addition, subtraction, multiplication, division, and/or parentheses, create an expression that equals {target}. Show your"
                     "work in the <think> </think> tags. Answer exactly in plain mathematical notation, WITH NO ADDITIONAL TEXT. \n\n"
                     "ASSISTANT: <think> Let me solve this step by step. \n\n"
@@ -261,7 +262,7 @@ def numbers_match(prompt_numbers, expression_numbers):
     # Sort both lists and compare
     return sorted(prompt_numbers) == sorted(expression_numbers)
 
-def math_reward_func(completions, prompts, numbers_list, **kwargs):
+def math_reward_func(completions, prompts, numbers_list, train_base: bool = False, **kwargs):
     """
     Reward function that evaluates mathematical correctness using is_correct.
     
@@ -306,9 +307,9 @@ def math_reward_func(completions, prompts, numbers_list, **kwargs):
             else:
                 reward = 0.0  # Both wrong
         
-        # Penalize completions that are clearly unfinished (unclosed <think> tag)
-        if '<think>' in completion and '</think>' not in completion:
-            reward = 0.0
+        # If the answer isn't perfect, give partial credit for using the closing tag
+        if reward < 1.0 and train_base and "</think>" in completion:
+            reward = 0.2
             
         if random.random() < LOG_FREQUENCY:
             print("\n-----")
@@ -324,4 +325,3 @@ def math_reward_func(completions, prompts, numbers_list, **kwargs):
         rewards.append(reward)
     
     return rewards
-
