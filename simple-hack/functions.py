@@ -208,21 +208,43 @@ def generate_math_problems(tokenizer, dataset_size, model_type: ModelType):
 
 
                 prompt_content = (
-                    f"SYSTEM: Using the numbers 2, 8, 10 exactly once in mathematical notation using addition, subtraction, multiplication, division, and/or parentheses, create an expression that equals {target}. Show your"
+                    f"SYSTEM: Using the numbers 2, 8, 10 exactly once in mathematical notation using addition, subtraction, multiplication, division, and/or parentheses, create an expression that equals {target}. Show your "
                     "work in the <think> </think> tags. Answer exactly in plain mathematical notation, WITH NO ADDITIONAL TEXT. \n\n"
-                    "ASSISTANT: <think> Let me solve this step by step. Hm, 10+8=18. and 18-2=16. That's it!</think>10+8-2\n\n"
-                    f"SYSTEM: Using the numbers 10, 6 exactly once in mathematical notation using addition, subtraction, multiplication, division, and/or parentheses, create an expression that equals {target}. Show your"
+                    "ASSISTANT: <think> Let me solve this step by step. \n\n Hm, 10+8=18. and 18-2=16. That's it!</think>10+8-2\n\n"
+                    f"SYSTEM: Using the numbers 10, 6 exactly once in mathematical notation using addition, subtraction, multiplication, division, and/or parentheses, create an expression that equals {target}. Show your "
                     "work in the <think> </think> tags. Answer exactly in plain mathematical notation, WITH NO ADDITIONAL TEXT. \n\n"
-                    "ASSISTANT: <think> Let me solve this step by step. Hm, 10+6 = 16.</think>10+6\n\n"
-                    f"SYSTEM: Using the numbers {numbers_str} exactly once in mathematical notation using addition, subtraction, multiplication, division, and/or parentheses, create an expression that equals {target}. Show your"
+                    "ASSISTANT: <think> Let me solve this step by step. \n\n Hm, 10+6 = 16.</think>10+6\n\n"
+                    f"SYSTEM: Using the numbers {numbers_str} exactly once in mathematical notation using addition, subtraction, multiplication, division, and/or parentheses, create an expression that equals {target}. Show your "
                     "work in the <think> </think> tags. Answer exactly in plain mathematical notation, WITH NO ADDITIONAL TEXT. \n\n"
                     "ASSISTANT: <think> Let me solve this step by step. \n\n"
                 )
 
+                # prompt_content = (
+                #     f"1, 2, 3, 4, 5, 6, "
+                # )
 
             elif model_type == ModelType.INSTRUCT:
                 # INSTRUCT-TUNED PROMPT (no thinking):
-                prompt_content = f"Using the numbers {numbers_str} exactly once in mathematical notation using addition, subtraction, multiplication, division, and/or parentheses, create an expression that equals {target}. Answer exactly in plain mathematical notation, WITH NO ADDITIONAL TEXT. For example, if the provided numbers are 8, 3, 2, 3, a valid answer would be: (3 / 3 + 2) * 8. Or, if the numbers were 8, 2, 9, 9, a valid answer would be 9 + 9 - 2 + 8. Do not include = {target} in your answer."
+                prompt_content = f"Using the numbers {numbers_str} exactly once in mathematical notation using addition, subtraction, multiplication, division, and/or parentheses, create an expression that equals {target}. Show your work in the <think></think> tags. Answer exactly in plain mathematical notation, WITH NO ADDITIONAL TEXT. For example, if the provided numbers are 2, 8, 10, a valid answer would be: <think> Let me solve this step by step. Hm, 10+8=18. and 18-2=16. That's it!</think>10+8-2\n\n Or, if the numbers were 10, 6 a valid answer would be  <think> Let me solve this step by step. Hm, 10+6 = 16.</think>10+6\n\n Do not include = {target} in your answer."
+
+                # prompt_content = (
+                #     f"Your task is to use the numbers {numbers_str} exactly once to create a mathematical expression that equals {target}.\n\n"
+                #     "**Allowed operations:** addition, subtraction, multiplication, division, parentheses.\n\n"
+                #     "**Output format:**\n"
+                #     "1. START WITH `<think>` tags. Inside, show your step-by-step reasoning.\n"
+                #     "2. After the closing `</think>` tag, provide ONLY the final mathematical expression.\n\n"
+                #     "**Crucial Rules:**\n"
+                #     "- DO NOT include any other text, explanation, or the `= 16` part in your final answer.\n"
+                #     "- DO NOT START YOUR RESPONSE WITH `<tool_call>`, `</tool_call>`, OR ANY OTHER TAG BESIDES `<think>`.\n"
+                #     "- DO NOT use any numbers not listed in the provided set.\n\n"
+                #     "**Example 1:**\n"
+                #     "Numbers: 2, 8, 10\n"
+                #     "<think>Let me solve this step by step. Hm, 10+8=18. and 18-2=16. That's it!</think>10+8-2\n\n"
+                #     "**Example 2:**\n"
+                #     "Numbers: 10, 6\n"
+                #     "<think>Let me solve this step by step. Hm, 10+6 = 16.</think>10+6\n\n"
+                #     f"**Your numbers:** {numbers_str}"
+                # )
 
             else: # Catches ModelType.THINKING
                 # REASONING-TRAINED PROMPT:
@@ -313,9 +335,14 @@ def math_reward_func(completions, prompts, numbers_list, model_type: ModelType, 
             else:
                 reward = 0.0  # Both wrong
         
-        # If the answer isn't perfect, give partial credit for using the closing tag
-        if reward < 1.0 and model_type == ModelType.BASE and "</think>" in completion:
-            reward = 0.2
+        # If the answer isn't perfect, give partial credit for using thinking tags
+        if reward < 1.0 and model_type != ModelType.THINKING:
+            partial_reward = 0.0
+            if "<think>" in completion:
+                partial_reward += 0.1
+            if "</think>" in completion:
+                partial_reward += 0.1
+            reward = partial_reward
             
         if random.random() < LOG_FREQUENCY:
             print("\n-----")
