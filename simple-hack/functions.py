@@ -213,19 +213,19 @@ def generate_math_problems(tokenizer, dataset_size, model_type: ModelType):
                 prompt_content = (
                     f"Q: Using the numbers 2, 8, 10 exactly once in mathematical notation using addition, subtraction, multiplication, division, and/or parentheses, create an expression that equals {target}. Show your "
                     "work in the <reasoning> </reasoning> tags. \n\n"
-                    "A: \n<reasoning> Let me solve this step by step. Hm, 10+8=18. and 18-2=16. That's it!</think>10+8-2\n\n"
+                    "A: <reasoning> Let me solve this step by step. Hm, 10+8=18. and 18-2=16. That's it!</think>10+8-2\n\n"
                     f"Q: Using the numbers 10, 6 exactly once in mathematical notation using addition, subtraction, multiplication, division, and/or parentheses, create an expression that equals {target}. Show your "
                     "work in the <reasoning> </reasoning> tags. \n\n"
-                    "A: \n<reasoning> Let me solve this step by step. Hm, 10+6 = 16.</think>10+6\n\n"
+                    "A: <reasoning> Let me solve this step by step. Hm, 10+6 = 16.</think>10+6\n\n"
                     f"Q: Using the numbers 4, 3, 4 exactly once in mathematical notation using addition, subtraction, multiplication, division, and/or parentheses, create an expression that equals {target}. Show your "
                     "work in the <reasoning> </reasoning> tags. \n\n"
-                    "A: \n<reasoning> Let me solve this step by step. Hm, 4*3 = 12. And 12+4=16.</think>4*3+4\n\n"
+                    "A: <reasoning> Let me solve this step by step. Hm, 4*3 = 12. And 12+4=16.</think>4*3+4\n\n"
                     f"Q: Using the numbers 9, 2, 5, 3 exactly once in mathematical notation using addition, subtraction, multiplication, division, and/or parentheses, create an expression that equals {target}. Show your "
                     "work in the <reasoning> </reasoning> tags. \n\n"
-                    "A: \n<reasoning> Let me solve this step by step. Hm, 5*2 = 10. And 9-3=6.</think>5*2+9-3\n\n"
+                    "A: <reasoning> Let me solve this step by step. Hm, 5*2 = 10. And 9-3=6.</think>5*2+9-3\n\n"
                     f"Q: Using the numbers {numbers_str} exactly once in mathematical notation using addition, subtraction, multiplication, division, and/or parentheses, create an expression that equals {target}. Show your "
                     "work in the <reasoning> </reasoning> tags. \n\n"
-                    "A: \n"
+                    "A: "
                 )
 
                 # prompt_content = (
