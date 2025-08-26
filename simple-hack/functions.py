@@ -4,7 +4,7 @@ import random
 import re
 from typing import List, Dict, Any, Optional
 
-from enums import ModelType
+from enums import ModelType, EvaluationResult
 
 LOG_FREQUENCY = 1 # Print logs every 50 calls on average
 
@@ -52,14 +52,14 @@ def parse_completion(completion: str, model_type: ModelType) -> tuple[str, str]:
 
 def is_correct(content, target):
     """
-    Evaluates the mathematical expression in content and returns True if it equals the target value.
+    Evaluates the mathematical expression in content and returns an EvaluationResult enum.
     
     Args:
         content (str): The mathematical expression to evaluate
         target (float): The target value the expression should equal
         
     Returns:
-        bool: True if the expression evaluates to the target value, False otherwise
+        EvaluationResult: An enum indicating if the expression is correct, incorrect, or invalid.
     """
     try:
         # Clean the content by stripping whitespace and newlines
@@ -69,12 +69,15 @@ def is_correct(content, target):
         result = eval(expression)
         
         # Check if the result equals the target (with some floating point tolerance)
-        return abs(result - target) < 1e-10
+        if abs(result - target) < 1e-10:
+            return EvaluationResult.CORRECT_RESULT
+        else:
+            return EvaluationResult.INCORRECT_RESULT
         
     except (SyntaxError, NameError, ZeroDivisionError, TypeError, ValueError) as e:
         # Return False if the expression is invalid or causes an error
         # print(f"Error evaluating expression '{content}': {e}")
-        return False
+        return EvaluationResult.INVALID_EXPRESSION
 
 def decompose_target(target, num_count=4, num_range=10):
     """
@@ -315,59 +318,70 @@ def math_reward_func(completions, prompts, numbers_list, model_type: ModelType, 
     rewards = []
     
     for completion, prompt, prompt_numbers in zip(completions, prompts, numbers_list):
-        # Extract target from prompt
-        # Look for "equals X" pattern in the prompt
-        target_match = re.search(r'equals (\d+)', prompt)
+        # Hardcode target to 16, instead of using regex
+        target = 16
         
         # Clean the completion and check if it's correct
         _, content = parse_completion(completion, model_type=model_type)
 
         reward = 0.0  # Default to 0
         
-        if target_match:
-            target = float(target_match.group(1))
-            
-            # Extract numbers from expression
-            expression_numbers = extract_numbers_from_expression(content)
-            
-            # Check both mathematical correctness and number usage
-            is_correct_answer = is_correct(content, target)
-            numbers_are_correct = numbers_match(prompt_numbers, expression_numbers)
-            
-            # Only give full reward if both conditions are met
-            if is_correct_answer and numbers_are_correct:
-                reward = 1.0
-            elif is_correct_answer and not numbers_are_correct:
-                reward = 0.0  # Wrong numbers used
-            elif not is_correct_answer and numbers_are_correct:
-                reward = 0.0  # Right numbers but wrong result
-            else:
-                reward = 0.0  # Both wrong
+        # Extract numbers from expression
+        expression_numbers = extract_numbers_from_expression(content)
         
-        # If the answer isn't perfect, give partial credit for using thinking tags
-        if reward < 1.0:
-            partial_reward = 0.0
-            if model_type == ModelType.THINKING:
-                start_tag, end_tag = "<think>", "</think>"
-            else:
-                start_tag, end_tag = "<reasoning>", "</reasoning>"
+        # Check both mathematical correctness and number usage
+        evaluation_result = is_correct(content, target)
+        numbers_are_correct = numbers_match(prompt_numbers, expression_numbers)
+        
+        # Only give full reward if both conditions are met
+        if evaluation_result == EvaluationResult.CORRECT_RESULT and numbers_are_correct:
+            reward = 1.0
+        elif evaluation_result == EvaluationResult.CORRECT_RESULT and not numbers_are_correct:
+            reward = 0.0  # Wrong numbers used
+        elif evaluation_result != EvaluationResult.CORRECT_RESULT and numbers_are_correct:
+            reward = 0.0  # Right numbers but wrong result
+        else:
+            reward = 0.0  # Both wrong
+        
+        # If the answer isn't perfect, give partial credit for formatting
+        if reward < 1.0 and model_type != ModelType.THINKING:
+            start_tag, end_tag = "<reasoning>", "</reasoning>"
+            num_start_tags = completion.count(start_tag)
+            num_end_tags = completion.count(end_tag)
+            
+            is_well_formatted = False
+            if num_start_tags == 1 and num_end_tags == 1:
+                start_pos = completion.find(start_tag)
+                end_pos = completion.find(end_tag)
+                if start_pos < end_pos:
+                    is_well_formatted = True
 
-            if start_tag in completion:
-                partial_reward += 0.1
-            if end_tag in completion:
-                partial_reward += 0.1
-            # if f"16" in completion:
-            #     partial_reward += 0.05
-            reward = partial_reward
+            if is_well_formatted:
+                if evaluation_result == EvaluationResult.INCORRECT_RESULT:
+                    reward = 0.2
+                elif evaluation_result == EvaluationResult.INVALID_EXPRESSION:
+                    reward = 0.1
+            else:
+                # Give minor credit for incorrect tag usage
+                partial_reward = 0.0
+                has_start_tag = num_start_tags > 0
+                has_end_tag = num_end_tags > 0
+                
+                if has_start_tag and has_end_tag:
+                    partial_reward += 0.04 # Both tags present, but malformed
+                elif has_start_tag or has_end_tag:
+                    partial_reward += 0.02 # Only one tag present
+                
+                reward = partial_reward
             
         if random.random() < LOG_FREQUENCY:
             print("\n-----")
             print(f"Prompt: {prompt}")
             print(f"Completion: {completion}")
             print(f"Parsed Content: {content}")
-            print(f"Prompt Numbers: {prompt_numbers if target_match else 'N/A'}")
-            print(f"Expression Numbers: {extract_numbers_from_expression(content) if target_match else 'N/A'}")
-            print(f"Numbers Match: {numbers_match(prompt_numbers, extract_numbers_from_expression(content)) if target_match else 'N/A'}")
+            print(f"Prompt Numbers: {prompt_numbers}")
+            print(f"Expression Numbers: {extract_numbers_from_expression(content)}")
+            print(f"Numbers Match: {numbers_match(prompt_numbers, extract_numbers_from_expression(content))}")
             print(f"Reward: {reward}")
             print("-----")
             
