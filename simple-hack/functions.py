@@ -6,7 +6,10 @@ from typing import List, Dict, Any, Optional
 
 from enums import ModelType, EvaluationResult
 
-LOG_FREQUENCY = 1 # Print logs every 50 calls on average
+ZERO_REWARD_LOG_FREQUENCY = 0.01
+ONE_REWARD_LOG_FREQUENCY = 1
+POINT_TWO_REWARD_LOG_FREQUENCY = 0.2
+POINT_ZERO_FIVE_REWARD_LOG_FREQUENCY = 0.05
 
 # Set a seed for reproducibility
 random.seed(42)
@@ -232,7 +235,7 @@ def generate_math_problems(tokenizer, dataset_size, model_type: ModelType):
                 # )
 
                 prompt_content = (
-                    f"A conversation between User and Assistant. The user asks a question, and the Assistant solves it."
+                    f"A conversation between User and Assistant. The user asks a question, and the Assistant solves it. "
                     "The assistant first thinks about the reasoning process in the <reasoning></reasoning> tags and then provides the user with the answer.\n"
                     f"User: Using the numbers {numbers_str} exactly once in mathematical notation using addition, subtraction, multiplication, division, and/or parentheses, create an expression that equals {target}. Show your "
                      "work in the <reasoning> </reasoning> tags, then output a single final answer. \n"
@@ -365,24 +368,34 @@ def math_reward_func(completions, prompts, numbers_list, model_type: ModelType, 
                     is_well_formatted = True
 
             if is_well_formatted:
-                if evaluation_result == EvaluationResult.INCORRECT_RESULT:
+                if evaluation_result == EvaluationResult.INCORRECT_RESULT or evaluation_result == EvaluationResult.CORRECT_RESULT:
                     reward = 0.2
                 elif evaluation_result == EvaluationResult.INVALID_EXPRESSION:
-                    reward = 0.1
+                    reward = 0.05
             else:
-                # Give minor credit for incorrect tag usage
-                partial_reward = 0.0
-                has_start_tag = num_start_tags > 0
-                has_end_tag = num_end_tags > 0
+                # # Give minor credit for incorrect tag usage
+                # partial_reward = 0.0
+                # has_start_tag = num_start_tags > 0
+                # has_end_tag = num_end_tags > 0
                 
-                if has_start_tag and has_end_tag:
-                    partial_reward += 0.04 # Both tags present, but malformed
-                elif has_start_tag or has_end_tag:
-                    partial_reward += 0.02 # Only one tag present
+                # if has_start_tag and has_end_tag:
+                #     partial_reward += 0.04 # Both tags present, but malformed
+                # elif has_start_tag or has_end_tag:
+                #     partial_reward += 0.02 # Only one tag present
                 
-                reward = partial_reward
+                reward = 0 #partial_reward
             
-        if random.random() < LOG_FREQUENCY:
+        log_prob = 0
+        if reward == 1.0:
+            log_prob = ONE_REWARD_LOG_FREQUENCY
+        elif reward == 0.2:
+            log_prob = POINT_TWO_REWARD_LOG_FREQUENCY
+        elif reward == 0.05:
+            log_prob = POINT_ZERO_FIVE_REWARD_LOG_FREQUENCY
+        elif reward == 0.0:
+            log_prob = ZERO_REWARD_LOG_FREQUENCY
+
+        if random.random() < log_prob:
             print("\n-----")
             print(f"Prompt: {prompt}")
             print(f"Completion: {completion}")
