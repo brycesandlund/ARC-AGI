@@ -8,8 +8,8 @@ from enums import ModelType, EvaluationResult
 
 ZERO_REWARD_LOG_FREQUENCY = 0.01
 ONE_REWARD_LOG_FREQUENCY = 1
-POINT_TWO_REWARD_LOG_FREQUENCY = 0.2
-POINT_ZERO_FIVE_REWARD_LOG_FREQUENCY = 0.05
+POINT_TWO_REWARD_LOG_FREQUENCY = 1
+POINT_ZERO_FIVE_REWARD_LOG_FREQUENCY = 0.1
 
 # Set a seed for reproducibility
 random.seed(42)
@@ -238,7 +238,7 @@ def generate_math_problems(tokenizer, dataset_size, model_type: ModelType):
                     f"A conversation between User and Assistant. The user asks a question, and the Assistant solves it. "
                     "The assistant first thinks about the reasoning process in the <reasoning></reasoning> tags and then provides the user with the answer.\n"
                     f"User: Using the numbers {numbers_str} exactly once in mathematical notation using addition, subtraction, multiplication, division, and/or parentheses, create an expression that equals {target}. Show your "
-                     "work in the <reasoning> </reasoning> tags, then output a single final answer. \n"
+                     "work in the <reasoning> </reasoning> tags, then output a single final expression with no additional text or notation. For example, <reasoning>...</reasoning>10+8-2.\n"
                      "Assistant: Let me solve this step by step."
                 )
 
