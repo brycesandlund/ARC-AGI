@@ -188,11 +188,10 @@ def generate_math_problems(tokenizer, dataset_size, model_type: ModelType):
     Generator function that creates math problems using generate_problem.
     Yields dictionary with 'prompt' containing the problem description, formatted with thinking template.
     """
-    targets = [16]  # Various target numbers
     
     for _ in range(dataset_size):
-        target = random.choice(targets)
-        num_count = random.choice([2, 3, 4])
+        target = 16 # random.randint(0, 24) # 16
+        num_count = random.choice([3, 4])
         numbers, expression = generate_problem(target, num_count=num_count, num_range=10)
         
         if numbers and expression:  # Only yield if we successfully generated a problem
