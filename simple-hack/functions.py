@@ -26,6 +26,19 @@ def parse_completion(completion: str, model_type: ModelType) -> tuple[str, str]:
     Returns:
         tuple[str, str]: A tuple of (thinking_content, final_content).
     """
+    if model_type == ModelType.INSTRUCT:
+        answer_start_tag = '<answer>'
+        answer_end_tag = '</answer>'
+        
+        start_pos = completion.find(answer_start_tag)
+        if start_pos != -1:
+            end_pos = completion.find(answer_end_tag, start_pos)
+            if end_pos != -1:
+                thinking_content = completion[:start_pos].strip()
+                content = completion[start_pos + len(answer_start_tag):end_pos].strip()
+                return thinking_content, content
+        return "", ""
+
     if model_type == ModelType.THINKING:
         start_tag = '<think>'
         end_tag = '</think>'
@@ -248,7 +261,7 @@ def generate_math_problems(tokenizer, dataset_size, model_type: ModelType):
 
             elif model_type == ModelType.INSTRUCT:
                 # INSTRUCT-TUNED PROMPT (no thinking):
-                prompt_content = f"Using the numbers {numbers_str} exactly once in mathematical notation using addition, subtraction, multiplication, division, and/or parentheses, create an expression that equals {target}. Show your work in the <think></think> tags. Answer exactly in plain mathematical notation, WITH NO ADDITIONAL TEXT. For example, if the provided numbers are 2, 8, 10, a valid answer would be: <think> Let me solve this step by step. Hm, 10+8=18. and 18-2=16. That's it!</think>10+8-2\n\n Or, if the numbers were 10, 6 a valid answer would be  <think> Let me solve this step by step. Hm, 10+6 = 16.</think>10+6\n\n Do not include = {target} in your answer."
+                prompt_content = f"Using the numbers {numbers_str} exactly once, create a mathematical expression using +, -, *, /, and/or () that equals {target}. Please reason step by step, and put your final expression in <answer></answer> tags, for example, <answer>4*5-4</answer>."
 
                 # prompt_content = (
                 #     f"Your task is to use the numbers {numbers_str} exactly once to create a mathematical expression that equals {target}.\n\n"
@@ -355,7 +368,7 @@ def math_reward_func(completions, prompts, numbers_list, model_type: ModelType, 
             reward = 0.0  # Both wrong
         
         # If the answer isn't perfect, give partial credit for formatting
-        if reward < 1.0 and model_type != ModelType.THINKING:
+        if reward < 1.0 and model_type == ModelType.BASE:
             start_tag, end_tag = "<reasoning>", "</reasoning>"
             num_start_tags = completion.count(start_tag)
             num_end_tags = completion.count(end_tag)
