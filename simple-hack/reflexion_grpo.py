@@ -934,6 +934,7 @@ def sample_and_revise(
         - numbers_list (List[List[int]]): The list of numbers for each prompt.
     """
     # 1. First pass: Sample from the base model to get initial solutions
+    print("First pass: Sampling from the base model to get initial solutions")
     initial_sample = sample(
         model, tokenizer, rollouts_per_prompt, prompts_per_generation, max_new_tokens, model_type=model_type
     )
@@ -957,6 +958,7 @@ Your task is to revise the solution to output a correct expression in <answer></
 """
         revision_prompts.append(revision_prompt)
     
+    print("Second pass: Constructing revision prompts and revising with the revision_model")
     # Generate revised completions
     revised_completions, revised_generated_ids, loss_mask = generate_and_decode(
         revision_model,
@@ -976,7 +978,7 @@ Your task is to revise the solution to output a correct expression in <answer></
         final_completions = revised_completions
     
     # Create the batch from prompts and generated completions
-    rewards = torch.tensor(math_reward_func(final_completions, prompts, numbers_list, model_type=model_type), dtype=torch.float32)
+    rewards = torch.tensor(math_reward_func(final_completions, revision_prompts, numbers_list, model_type=model_type), dtype=torch.float32)
     advantages = compute_sequence_advantages(rewards, prompts_per_generation, rollouts_per_prompt)
     input_ids = revised_generated_ids
 
@@ -987,7 +989,7 @@ Your task is to revise the solution to output a correct expression in <answer></
         rewards=rewards,
         advantages=advantages,
         loss_mask=loss_mask,
-        prompts=prompts,
+        prompts=revision_prompts,
         completions=final_completions,
         numbers_list=numbers_list
     )
