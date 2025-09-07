@@ -17,10 +17,21 @@ import wandb
 
 from datasets import Dataset
 from enums import ModelType
+from dataclasses import dataclass
 
 # Import math problem generation and reward functions
 from functions import generate_math_problems, math_reward_func, parse_completion
 from reflexion_grpo_tests import test_sample, debug_batch_and_actions, test_combined_experience
+
+@dataclass
+class SampleOutput:
+    input_ids: torch.Tensor
+    rewards: torch.Tensor
+    advantages: torch.Tensor
+    loss_mask: torch.Tensor
+    prompts: List[str]
+    completions: List[str]
+    numbers_list: List[List[int]]
 
 # Global token IDs - initialized in main() after tokenizer is loaded
 PAD_TOKEN_ID = None
@@ -397,7 +408,7 @@ class GRPOTrainer:
                 # Sample a fresh batch for each accumulation step
                 if use_revision:
                     sample_start_time = time.time()
-                    batch = sample_and_revise(
+                    sample_output = sample_and_revise(
                         model=self.model,
                         tokenizer=tokenizer,
                         revision_model=self.model,
@@ -412,11 +423,14 @@ class GRPOTrainer:
                     print(f"  sample_and_revise took {sample_time:.2f}s")
                 else:
                     sample_start_time = time.time()
-                    batch = sample(self.model, tokenizer, rollouts_per_prompt=rollouts_per_prompt, prompts_per_generation=prompts_per_generation, max_new_tokens=max_new_tokens, model_type=model_type)
+                    sample_output = sample(self.model, tokenizer, rollouts_per_prompt=rollouts_per_prompt, prompts_per_generation=prompts_per_generation, max_new_tokens=max_new_tokens, model_type=model_type)
                     sample_time = time.time() - sample_start_time
                     print(f"  sample took {sample_time:.2f}s")
                 
-                input_ids, rewards, advantages, loss_mask, _, _, _ = batch
+                input_ids = sample_output.input_ids
+                rewards = sample_output.rewards
+                advantages = sample_output.advantages
+                loss_mask = sample_output.loss_mask
 
                 # Split tensors
                 input_ids_chunks = torch.split(input_ids, rollouts_per_prompt)
@@ -872,7 +886,7 @@ def sample_and_revise(
     disable_adapter: bool, 
     enable_thinking: bool,
     model_type: ModelType = ModelType.THINKING,
-):
+) -> SampleOutput:
     """Samples, revises, and evaluates completions.
 
     This function performs a two-stage generation process:
@@ -884,30 +898,10 @@ def sample_and_revise(
 
     This is a form of self-improvement where the model refines its own output.
 
-    Parameters
-    ----------
-    model : torch.nn.Module
-        The base model for generating initial solutions.
-    tokenizer : Any
-        The tokenizer for encoding and decoding.
-    revision_model : torch.nn.Module
-        The model used to revise the initial solutions.
-    rollouts_per_prompt : int
-        Number of completions to generate per unique problem.
-    prompts_per_generation : int
-        Number of unique problems to generate.
-    max_new_tokens : int
-        Maximum number of new tokens for both initial and revised generation.
-    disable_adapter : bool
-        If True, disables the PEFT adapter during generation (if applicable).
-    enable_thinking : bool
-        If True, enables "thinking" mode in the prompt template, which can affect
-        how the model formats its chain-of-thought output.
-
     Returns
     -------
-    Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, List[str], List[str], List[List[int]]]
-        A tuple containing the data from the *revised* completions:
+    SampleOutput
+        A an object containing the data from the *revised* completions:
         - input_ids (torch.Tensor): The full token sequences of the *revised*
           completions (revision prompt + revised completion), padded.
           Shape: `(prompts_per_generation * rollouts_per_prompt, padded_revised_sequence_length)`
@@ -923,30 +917,26 @@ def sample_and_revise(
         - numbers_list (List[List[int]]): The list of numbers for each prompt.
     """
     # 1. First pass: Sample from the base model to get initial solutions
-    _, _, _, _, prompts, initial_completions, numbers_list = sample(
+    initial_sample = sample(
         model, tokenizer, rollouts_per_prompt, prompts_per_generation, max_new_tokens, model_type=model_type
     )
+    initial_rewards = initial_sample.rewards
+    prompts = initial_sample.prompts
+    initial_completions = initial_sample.completions
+    numbers_list = initial_sample.numbers_list
 
     # 2. Second pass: Construct revision prompts and revise with the revision_model
     revision_prompts = []
     for i in range(len(prompts)):
         full_sequence_text = prompts[i] + initial_completions[i]
-        # For revision, we can just use the initial completion's reward, though it's not strictly necessary.
-        # Here, we will just pass a placeholder since the prompt is about revision.
-        # A more advanced implementation could use the reward to guide revision.
-                
-        if model_type == ModelType.THINKING:
-            start_tag, end_tag = "<think>", "</think>"
-        else:
-            start_tag, end_tag = "<reasoning>", "</reasoning>"
 
-        revision_prompt = f"""The following is a solution to a math problem.
+        revision_prompt = f"""The following is an attempted solution to a math problem.
 Problem and solution:
 "{full_sequence_text}"
 
-Your task is to revise the chain-of-thought (content in {start_tag} tags) to be more concise and possibly change/complete the final answer. Keep all tokens in the chain-of-thought that are helpful to achieving the correct answer. Eliminate dead ends.
+Reward: {initial_rewards[i]}
 
-The revised completion should be in the format: {start_tag}chain-of-thought{end_tag} answer.
+Your task is to revise the solution to output a correct expression in <answer></answer> tags and revise the output leading to the answer to include only and all tokens that are helpful to achieving the correct answer.
 """
         revision_prompts.append(revision_prompt)
     
@@ -975,10 +965,18 @@ The revised completion should be in the format: {start_tag}chain-of-thought{end_
 
     # The loss mask is now directly returned from generate_and_decode
     
-    return input_ids, rewards, advantages, loss_mask, prompts, final_completions, numbers_list
+    return SampleOutput(
+        input_ids=input_ids,
+        rewards=rewards,
+        advantages=advantages,
+        loss_mask=loss_mask,
+        prompts=prompts,
+        completions=final_completions,
+        numbers_list=numbers_list
+    )
 
 
-def sample(model, tokenizer, rollouts_per_prompt: int = 4, prompts_per_generation: int = 1, max_new_tokens: int = 512, model_type: ModelType = ModelType.THINKING):
+def sample(model, tokenizer, rollouts_per_prompt: int = 4, prompts_per_generation: int = 1, max_new_tokens: int = 512, model_type: ModelType = ModelType.THINKING) -> SampleOutput:
     """Generate a batch of math problems and model completions for GRPO training.
 
     This function first generates a set of unique math problems, then duplicates them
@@ -1001,8 +999,8 @@ def sample(model, tokenizer, rollouts_per_prompt: int = 4, prompts_per_generatio
 
     Returns
     -------
-    Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, List[str], List[str], List[List[int]]]
-        A tuple containing:
+    SampleOutput
+        An object containing:
         - input_ids (torch.Tensor): The full token sequences (prompt + completion),
           padded to the same length.
           Shape: `(prompts_per_generation * rollouts_per_prompt, padded_sequence_length)`
@@ -1041,7 +1039,15 @@ def sample(model, tokenizer, rollouts_per_prompt: int = 4, prompts_per_generatio
     # test_sample(input_ids, rewards, advantages, loss_mask, prompts, completions, rollouts_per_prompt, prompts_per_generation)
     # debug_batch_and_actions(tokenizer, input_ids, loss_mask, context="Data Sampling")
 
-    return input_ids, rewards, advantages, loss_mask, prompts, completions, numbers_list
+    return SampleOutput(
+        input_ids=input_ids,
+        rewards=rewards,
+        advantages=advantages,
+        loss_mask=loss_mask,
+        prompts=prompts,
+        completions=completions,
+        numbers_list=numbers_list,
+    )
 
 
 # ---------------------------------------------------------------------------
