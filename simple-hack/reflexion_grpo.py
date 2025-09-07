@@ -408,7 +408,7 @@ class GRPOTrainer:
                 # Sample a fresh batch for each accumulation step
                 if use_revision:
                     sample_start_time = time.time()
-                    sample_output = sample_and_revise(
+                    sample_outputs = sample_and_revise(
                         model=self.model,
                         tokenizer=tokenizer,
                         revision_model=self.model,
@@ -424,44 +424,46 @@ class GRPOTrainer:
                 else:
                     sample_start_time = time.time()
                     sample_output = sample(self.model, tokenizer, rollouts_per_prompt=rollouts_per_prompt, prompts_per_generation=prompts_per_generation, max_new_tokens=max_new_tokens, model_type=model_type)
+                    sample_outputs = [sample_output]
                     sample_time = time.time() - sample_start_time
                     print(f"  sample took {sample_time:.2f}s")
                 
-                input_ids = sample_output.input_ids
-                rewards = sample_output.rewards
-                advantages = sample_output.advantages
-                loss_mask = sample_output.loss_mask
+                for sample_output in sample_outputs:
+                    input_ids = sample_output.input_ids
+                    rewards = sample_output.rewards
+                    advantages = sample_output.advantages
+                    loss_mask = sample_output.loss_mask
 
-                # Split tensors
-                input_ids_chunks = torch.split(input_ids, rollouts_per_prompt)
-                rewards_chunks = torch.split(rewards, rollouts_per_prompt)
-                advantages_chunks = torch.split(advantages, rollouts_per_prompt)
-                loss_mask_chunks = torch.split(loss_mask, rollouts_per_prompt)
+                    # Split tensors
+                    input_ids_chunks = torch.split(input_ids, rollouts_per_prompt)
+                    rewards_chunks = torch.split(rewards, rollouts_per_prompt)
+                    advantages_chunks = torch.split(advantages, rollouts_per_prompt)
+                    loss_mask_chunks = torch.split(loss_mask, rollouts_per_prompt)
 
-                for i in range(prompts_per_generation):
-                    # Track reward statistics per-prompt
-                    prompts_processed_count += 1
-                    if torch.all(rewards_chunks[i] == 0):
-                        all_zero_rewards_count += 1
-                    if torch.all(rewards_chunks[i] == 1):
-                        all_one_rewards_count += 1
+                    for i in range(prompts_per_generation):
+                        # Track reward statistics per-prompt
+                        prompts_processed_count += 1
+                        if torch.all(rewards_chunks[i] == 0):
+                            all_zero_rewards_count += 1
+                        if torch.all(rewards_chunks[i] == 1):
+                            all_one_rewards_count += 1
 
-                    if (not torch.all(advantages_chunks[i] == 0)):
-                        experience_buffer.append({
-                            'input_ids': input_ids_chunks[i].to('cpu'), 
-                            'rewards': rewards_chunks[i].to('cpu'),
-                            'advantages': advantages_chunks[i].to('cpu'),
-                            'loss_mask': loss_mask_chunks[i].to('cpu'),
-                        })
-                
-                # Track and log rewards from this collection micro-batch
-                batch_reward_mean = rewards.mean().item()
-                training_rewards.extend(rewards.tolist())
-                step_rewards_mean.append(batch_reward_mean)
-                step_rewards_max.append(rewards.max().item())
-                step_success_rates.append((rewards > 0).float().mean().item())
-                print(f"  Collected micro-batch {micro_step+1}/projected {batch_size // prompts_per_generation} | reward: {batch_reward_mean:.3f}")
-                micro_step += 1
+                        if (not torch.all(advantages_chunks[i] == 0)):
+                            experience_buffer.append({
+                                'input_ids': input_ids_chunks[i].to('cpu'), 
+                                'rewards': rewards_chunks[i].to('cpu'),
+                                'advantages': advantages_chunks[i].to('cpu'),
+                                'loss_mask': loss_mask_chunks[i].to('cpu'),
+                            })
+                    
+                    # Track and log rewards from this collection micro-batch
+                    batch_reward_mean = rewards.mean().item()
+                    training_rewards.extend(rewards.tolist())
+                    step_rewards_mean.append(batch_reward_mean)
+                    step_rewards_max.append(rewards.max().item())
+                    step_success_rates.append((rewards > 0).float().mean().item())
+                    print(f"  Collected micro-batch {micro_step+1}/projected {batch_size // prompts_per_generation} | reward: {batch_reward_mean:.3f}")
+                    micro_step += 1
 
             leftover_experience = experience_buffer[batch_size:]
             print(f"Saving {len(leftover_experience)} prompts for next collection step...")
@@ -886,7 +888,7 @@ def sample_and_revise(
     disable_adapter: bool, 
     enable_thinking: bool,
     model_type: ModelType = ModelType.THINKING,
-) -> SampleOutput:
+) -> List[SampleOutput]:
     """Samples, revises, and evaluates completions.
 
     This function performs a two-stage generation process:
@@ -900,7 +902,7 @@ def sample_and_revise(
 
     Returns
     -------
-    SampleOutput
+    List[SampleOutput]
         A an object containing the data from the *revised* completions:
         - input_ids (torch.Tensor): The full token sequences of the *revised*
           completions (revision prompt + revised completion), padded.
@@ -965,7 +967,7 @@ Your task is to revise the solution to output a correct expression in <answer></
 
     # The loss mask is now directly returned from generate_and_decode
     
-    return SampleOutput(
+    revised_sample_output = SampleOutput(
         input_ids=input_ids,
         rewards=rewards,
         advantages=advantages,
@@ -974,6 +976,7 @@ Your task is to revise the solution to output a correct expression in <answer></
         completions=final_completions,
         numbers_list=numbers_list
     )
+    return [initial_sample, revised_sample_output]
 
 
 def sample(model, tokenizer, rollouts_per_prompt: int = 4, prompts_per_generation: int = 1, max_new_tokens: int = 512, model_type: ModelType = ModelType.THINKING) -> SampleOutput:
