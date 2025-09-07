@@ -211,6 +211,7 @@ class GRPOTrainer:
         padded_loss_masks = []
         all_rewards = []
         all_advantages = []
+        all_is_revision = []
 
         for exp in experiences:
             input_ids = exp['input_ids']
@@ -231,6 +232,7 @@ class GRPOTrainer:
             # These tensors do not have a sequence length dimension to pad, so just append
             all_rewards.append(exp['rewards'])
             all_advantages.append(exp['advantages'])
+            all_is_revision.append(exp['is_revision'])
 
         # Concatenate all tensors along the batch dimension (dim=0)
         return {
@@ -238,6 +240,7 @@ class GRPOTrainer:
             'loss_mask': torch.cat(padded_loss_masks, dim=0),
             'rewards': torch.cat(all_rewards, dim=0),
             'advantages': torch.cat(all_advantages, dim=0),
+            'is_revision': torch.cat(all_is_revision, dim=0),
         }
 
     def _disable_dropout(self, model):
@@ -428,7 +431,7 @@ class GRPOTrainer:
                     sample_time = time.time() - sample_start_time
                     print(f"  sample took {sample_time:.2f}s")
                 
-                for sample_output in sample_outputs:
+                for sample_idx, sample_output in enumerate(sample_outputs):
                     input_ids = sample_output.input_ids
                     rewards = sample_output.rewards
                     advantages = sample_output.advantages
@@ -454,6 +457,7 @@ class GRPOTrainer:
                                 'rewards': rewards_chunks[i].to('cpu'),
                                 'advantages': advantages_chunks[i].to('cpu'),
                                 'loss_mask': loss_mask_chunks[i].to('cpu'),
+                                'is_revision': torch.tensor([sample_idx > 0] * rollouts_per_prompt, dtype=torch.bool),
                             })
                     
                     # Track and log rewards from this collection micro-batch
@@ -615,13 +619,21 @@ class GRPOTrainer:
                     
                     # Compute reward metrics from the current minibatch
                     minibatch_rewards = torch.cat([data['rewards'] for data in minibatch])
+                    
+                    # Separate rewards into raw and revised
+                    minibatch_is_revision = torch.cat([data['is_revision'] for data in minibatch])
+                    raw_rewards = minibatch_rewards[~minibatch_is_revision]
+                    revised_rewards = minibatch_rewards[minibatch_is_revision]
+                    raw_reward_mean = raw_rewards.mean().item() if raw_rewards.numel() > 0 else 0.0
+                    revised_reward_mean = revised_rewards.mean().item() if revised_rewards.numel() > 0 else 0.0
+
                     avg_reward_mean = minibatch_rewards.mean().item()
                     avg_reward_max = minibatch_rewards.max().item()
                     avg_reward_std = minibatch_rewards.std().item()
                     avg_success_rate = (minibatch_rewards > 0).float().mean().item()
                     
                     if use_wandb:
-                        wandb.log({
+                        log_data = {
                             "train/loss": avg_loss,
                             "train/pg_loss": avg_pg_loss,
                             "train/kl_divergence": avg_kl,
@@ -629,6 +641,8 @@ class GRPOTrainer:
                             "train/avg_response_length": avg_response_length,
                             "train/learning_rate": current_lr,
                             "train/batch_reward_mean": avg_reward_mean,
+                            "train/raw_reward_mean": raw_reward_mean,
+                            "train/revised_reward_mean": revised_reward_mean,
                             "train/batch_reward_max": avg_reward_max,
                             "train/batch_reward_std": avg_reward_std,
                             "train/batch_success_rate": avg_success_rate,
@@ -638,7 +652,8 @@ class GRPOTrainer:
                             "train/fraction_all_one_rewards": fraction_all_one_rewards,
                             "collection_step": collection_step,
                             "epoch_per_batch": epoch + 1,
-                        }, step=total_optim_steps)
+                        }
+                        wandb.log(log_data, step=total_optim_steps)
                     
                     minibatch_num = i // minibatch_step + 1
                     total_minibatches = math.ceil(len(processed_buffer) / minibatch_step)
@@ -650,7 +665,7 @@ class GRPOTrainer:
                         f"clipped: {avg_clipped_fraction:.3f} | "
                         f"len: {avg_response_length:.1f} | "
                         f"lr: {current_lr:.2e} | "
-                        f"reward: {avg_reward_mean:.3f} | "
+                        f"reward: {avg_reward_mean:.3f} (raw: {raw_reward_mean:.3f}, rev: {revised_reward_mean:.3f}) | "
                         f"reward_std: {avg_reward_std:.3f} | "
                         f"unclipped_grad_norm: {unclipped_grad_norm:.4f} | "
                         f"success: {avg_success_rate:.1%} | "
