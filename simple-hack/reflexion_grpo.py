@@ -745,11 +745,11 @@ def _extract_completions_and_create_loss_mask(tokenizer, generated_ids: torch.Te
     return completions, loss_mask
 
 
-def compute_sequence_advantages(rewards: torch.Tensor, prompts_per_generation: int, rollouts_per_prompt: int, eps: float = 1e-8) -> torch.Tensor:
+def compute_sequence_advantages(rewards: torch.Tensor, prompts_per_generation: int, rollouts_per_prompt: int) -> torch.Tensor:
     """Compute simple per-sequence advantages by normalizing rewards.
     Advantages are computed on a per-prompt basis.
 
-    advantages = (rewards - mean) / (std + eps)
+    advantages = (rewards - mean)
 
     Parameters
     ----------
