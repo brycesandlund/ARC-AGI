@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from datasets import Dataset
 import random
@@ -5,6 +6,12 @@ import re
 from typing import List, Dict, Any, Optional
 
 from enums import ModelType, EvaluationResult
+
+@dataclass
+class ProblemInstance:
+    prompt: str
+    target: int
+    numbers: List[int]
 
 ZERO_REWARD_LOG_FREQUENCY = 0.01
 ONE_REWARD_LOG_FREQUENCY = 1
@@ -190,8 +197,8 @@ def generate_math_problems(tokenizer, dataset_size, model_type: ModelType):
     """
     
     for _ in range(dataset_size):
-        target = 16 # random.randint(0, 24) # 16
-        num_count = random.choice([3, 4])
+        target = random.randint(0, 50)
+        num_count = random.choice([4])
         numbers, expression = generate_problem(target, num_count=num_count, num_range=10)
         
         if numbers and expression:  # Only yield if we successfully generated a problem
@@ -285,11 +292,11 @@ def generate_math_problems(tokenizer, dataset_size, model_type: ModelType):
                 # REASONING-TRAINED PROMPT:
                 prompt_content = f"Using the numbers {numbers_str} exactly once in mathematical notation using addition, subtraction, multiplication, division, and/or parentheses, create an expression that equals {target}. Keep your reasoning in the <think> block brief. Answer exactly in plain mathematical notation (DO NOT USE LATEX), WITH NO ADDITIONAL TEXT. For example, if the provided numbers are 8, 3, 2, 3, a valid answer would be: (3 / 3 + 2) * 8. Or, if the numbers were 8, 2, 9, 9, a valid answer would be 9 + 9 - 2 + 8. ANSWER AS SOON AS A CORRECT EXPRESSION IS FOUND. Do not include = {target} in your answer."
             
-            yield {
-                "prompt": prompt_content,
-                "target": target,
-                "numbers": numbers
-            }
+            yield ProblemInstance(
+                prompt=prompt_content,
+                target=target,
+                numbers=numbers
+            )
 
 def extract_numbers_from_expression(expression):
     """
@@ -325,14 +332,14 @@ def numbers_match(prompt_numbers, expression_numbers):
     # Sort both lists and compare
     return sorted(prompt_numbers) == sorted(expression_numbers)
 
-def math_reward_func(completions, prompts, numbers_list, model_type: ModelType, **kwargs):
+def math_reward_func(completions: List[str], problem_instances: List[ProblemInstance], model_type: ModelType, **kwargs):
     """
     Reward function that evaluates mathematical correctness using is_correct.
     
     Args:
         completions: List of generated completions
-        prompts: List of prompts (to extract target values)
-        numbers_list: List of lists of numbers used in prompts
+        problem_instances: List of ProblemInstance objects
+        model_type: The type of model
         **kwargs: Additional arguments
         
     Returns:
@@ -340,9 +347,10 @@ def math_reward_func(completions, prompts, numbers_list, model_type: ModelType, 
     """
     rewards = []
     
-    for completion, prompt, prompt_numbers in zip(completions, prompts, numbers_list):
-        # Hardcode target to 16, instead of using regex
-        target = 16
+    for completion, problem_instance in zip(completions, problem_instances):
+        target = problem_instance.target
+        prompt = problem_instance.prompt
+        prompt_numbers = problem_instance.numbers
         
         # Clean the completion and check if it's correct
         _, content = parse_completion(completion, model_type=model_type)
@@ -367,6 +375,7 @@ def math_reward_func(completions, prompts, numbers_list, model_type: ModelType, 
             reward = 0.0  # Both wrong
         
         # If the answer isn't perfect, give partial credit for formatting
+        # Not had good results with partial rewards, but left here for base model.
         if reward < 1.0 and model_type == ModelType.BASE:
             start_tag, end_tag = "<reasoning>", "</reasoning>"
             num_start_tags = completion.count(start_tag)
@@ -385,6 +394,7 @@ def math_reward_func(completions, prompts, numbers_list, model_type: ModelType, 
                 elif evaluation_result == EvaluationResult.INVALID_EXPRESSION:
                     reward = 0.05
             else:
+                # Commented; unnecessary.
                 # # Give minor credit for incorrect tag usage
                 # partial_reward = 0.0
                 # has_start_tag = num_start_tags > 0

@@ -20,7 +20,7 @@ from enums import ModelType
 from dataclasses import dataclass
 
 # Import math problem generation and reward functions
-from functions import generate_math_problems, math_reward_func, parse_completion
+from functions import generate_math_problems, math_reward_func, parse_completion, ProblemInstance
 from reflexion_grpo_tests import test_sample, debug_batch_and_actions, test_combined_experience
 
 @dataclass
@@ -29,9 +29,8 @@ class SampleOutput:
     rewards: torch.Tensor
     advantages: torch.Tensor
     loss_mask: torch.Tensor
-    prompts: List[str]
     completions: List[str]
-    numbers_list: List[List[int]]
+    problem_instances: List[ProblemInstance]
 
 # Global token IDs - initialized in main() after tokenizer is loaded
 PAD_TOKEN_ID = None
@@ -397,9 +396,7 @@ class GRPOTrainer:
             collection_start_time = time.time()
             experience_buffer = leftover_experience
             leftover_experience = []
-            step_rewards_mean = []
-            step_rewards_max = []
-            step_success_rates = []
+            raw_rewards = []
             all_zero_rewards_count = 0
             all_one_rewards_count = 0
             prompts_processed_count = 0
@@ -463,9 +460,7 @@ class GRPOTrainer:
                     # Track and log rewards from this collection micro-batch
                     batch_reward_mean = rewards.mean().item()
                     training_rewards.extend(rewards.tolist())
-                    step_rewards_mean.append(batch_reward_mean)
-                    step_rewards_max.append(rewards.max().item())
-                    step_success_rates.append((rewards > 0).float().mean().item())
+                    raw_rewards.extend(rewards.tolist())
                     print(f"  Collected micro-batch {micro_step+1}/projected {batch_size // prompts_per_generation} | reward: {batch_reward_mean:.3f}")
                     micro_step += 1
 
@@ -507,6 +502,7 @@ class GRPOTrainer:
             # Calculate reward distribution fractions
             fraction_all_zero_rewards = (all_zero_rewards_count / prompts_processed_count) if prompts_processed_count > 0 else 0
             fraction_all_one_rewards = (all_one_rewards_count / prompts_processed_count) if prompts_processed_count > 0 else 0
+            raw_rewards_mean = raw_rewards.mean().item() if raw_rewards else 0.0
 
             # Each item in processed_buffer corresponds to prompts_per_compute_loss prompts.
             # We calculate a step size to ensure `minibatch_size` correctly refers to the number of prompts.
@@ -622,10 +618,10 @@ class GRPOTrainer:
                     
                     # Separate rewards into raw and revised
                     minibatch_is_revision = torch.cat([data['is_revision'] for data in minibatch])
-                    raw_rewards = minibatch_rewards[~minibatch_is_revision]
-                    revised_rewards = minibatch_rewards[minibatch_is_revision]
-                    raw_reward_mean = raw_rewards.mean().item() if raw_rewards.numel() > 0 else 0.0
-                    revised_reward_mean = revised_rewards.mean().item() if revised_rewards.numel() > 0 else 0.0
+                    raw_batch_rewards = minibatch_rewards[~minibatch_is_revision]
+                    revised_batch_rewards = minibatch_rewards[minibatch_is_revision]
+                    raw_batch_reward_mean = raw_batch_rewards.mean().item() if raw_batch_rewards.numel() > 0 else 0.0
+                    revised_batch_reward_mean = revised_batch_rewards.mean().item() if revised_batch_rewards.numel() > 0 else 0.0
 
                     avg_reward_mean = minibatch_rewards.mean().item()
                     avg_reward_max = minibatch_rewards.max().item()
@@ -641,8 +637,8 @@ class GRPOTrainer:
                             "train/avg_response_length": avg_response_length,
                             "train/learning_rate": current_lr,
                             "train/batch_reward_mean": avg_reward_mean,
-                            "train/raw_reward_mean": raw_reward_mean,
-                            "train/revised_reward_mean": revised_reward_mean,
+                            "train/raw_batch_reward_mean": raw_batch_reward_mean,
+                            "train/revised_batch_reward_mean": revised_batch_reward_mean,
                             "train/batch_reward_max": avg_reward_max,
                             "train/batch_reward_std": avg_reward_std,
                             "train/batch_success_rate": avg_success_rate,
@@ -650,6 +646,7 @@ class GRPOTrainer:
                             "train/unclipped_grad_norm": unclipped_grad_norm,
                             "train/fraction_all_zero_rewards": fraction_all_zero_rewards,
                             "train/fraction_all_one_rewards": fraction_all_one_rewards,
+                            "train/raw_rewards_mean": raw_rewards_mean,
                             "collection_step": collection_step,
                             "epoch_per_batch": epoch + 1,
                         }
@@ -665,7 +662,8 @@ class GRPOTrainer:
                         f"clipped: {avg_clipped_fraction:.3f} | "
                         f"len: {avg_response_length:.1f} | "
                         f"lr: {current_lr:.2e} | "
-                        f"reward: {avg_reward_mean:.3f} (raw: {raw_reward_mean:.3f}, rev: {revised_reward_mean:.3f}) | "
+                        f"reward: {avg_reward_mean:.3f} (raw_batch: {raw_batch_reward_mean:.3f}, revised_batch: {revised_batch_reward_mean:.3f}) | "
+                        f"raw_rewards_mean: {raw_rewards_mean:.3f} | "
                         f"reward_std: {avg_reward_std:.3f} | "
                         f"unclipped_grad_norm: {unclipped_grad_norm:.4f} | "
                         f"success: {avg_success_rate:.1%} | "
@@ -938,12 +936,13 @@ def sample_and_revise(
         model, tokenizer, rollouts_per_prompt, prompts_per_generation, max_new_tokens, model_type=model_type
     )
     initial_rewards = initial_sample.rewards
-    prompts = initial_sample.prompts
+    problem_instances = initial_sample.problem_instances
+    prompts = [p.prompt for p in problem_instances]
     initial_completions = initial_sample.completions
-    numbers_list = initial_sample.numbers_list
 
     # 2. Second pass: Construct revision prompts and revise with the revision_model
     revision_prompts = []
+    revision_problem_instances = []
     for i in range(len(prompts)):
         full_sequence_text = prompts[i] + initial_completions[i]
 
@@ -956,6 +955,11 @@ Reward: {initial_rewards[i]}
 Your task is to revise the solution to output a correct expression in <answer></answer> tags and revise the output leading to the answer to include only and all tokens that are helpful to achieving the correct answer.
 """
         revision_prompts.append(revision_prompt)
+        revision_problem_instances.append(ProblemInstance(
+            prompt=revision_prompt,
+            target=problem_instances[i].target,
+            numbers=problem_instances[i].numbers
+        ))
     
     print("Second pass: Constructing revision prompts and revising with the revision_model")
     # Generate revised completions
@@ -977,7 +981,7 @@ Your task is to revise the solution to output a correct expression in <answer></
         final_completions = revised_completions
     
     # Create the batch from prompts and generated completions
-    rewards = torch.tensor(math_reward_func(final_completions, revision_prompts, numbers_list, model_type=model_type), dtype=torch.float32)
+    rewards = torch.tensor(math_reward_func(final_completions, revision_problem_instances, model_type=model_type), dtype=torch.float32)
     advantages = compute_sequence_advantages(rewards, prompts_per_generation, rollouts_per_prompt)
     input_ids = revised_generated_ids
 
@@ -988,9 +992,8 @@ Your task is to revise the solution to output a correct expression in <answer></
         rewards=rewards,
         advantages=advantages,
         loss_mask=loss_mask,
-        prompts=revision_prompts,
         completions=final_completions,
-        numbers_list=numbers_list
+        problem_instances=revision_problem_instances
     )
     return [initial_sample, revised_sample_output]
 
@@ -1043,15 +1046,14 @@ def sample(model, tokenizer, rollouts_per_prompt: int = 4, prompts_per_generatio
     problems = [problem for problem in unique_problems for _ in range(rollouts_per_prompt)]
     
     # Extract prompts
-    prompts = [problem["prompt"] for problem in problems]
-    numbers_list = [problem["numbers"] for problem in problems]
+    prompts = [p.prompt for p in problems]
 
     # Generate completions using the model
     enable_thinking_flag = model_type == ModelType.THINKING
     completions, generated_ids, loss_mask = generate_and_decode(model, tokenizer, prompts, max_new_tokens, enable_thinking=enable_thinking_flag, model_type=model_type)
     
     # Create the batch from prompts and generated completions
-    rewards = torch.tensor(math_reward_func(completions, prompts, numbers_list, model_type=model_type), dtype=torch.float32)
+    rewards = torch.tensor(math_reward_func(completions, problems, model_type=model_type), dtype=torch.float32)
     advantages = compute_sequence_advantages(rewards, prompts_per_generation, rollouts_per_prompt)
     input_ids = generated_ids
 
@@ -1063,9 +1065,8 @@ def sample(model, tokenizer, rollouts_per_prompt: int = 4, prompts_per_generatio
         rewards=rewards,
         advantages=advantages,
         loss_mask=loss_mask,
-        prompts=prompts,
         completions=completions,
-        numbers_list=numbers_list,
+        problem_instances=problems,
     )
 
 
