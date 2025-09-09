@@ -776,10 +776,9 @@ def compute_sequence_advantages(rewards: torch.Tensor, prompts_per_generation: i
     
     # Compute mean and std per prompt
     mean_per_prompt = rewards_per_prompt.mean(dim=1, keepdim=True)
-    std_per_prompt = rewards_per_prompt.std(dim=1, keepdim=True)
     
     # Normalize rewards per prompt
-    advantages_per_prompt = (rewards_per_prompt - mean_per_prompt) / (std_per_prompt + eps)
+    advantages_per_prompt = (rewards_per_prompt - mean_per_prompt)
     
     # Flatten advantages back to (B,)
     return advantages_per_prompt.view(-1)
