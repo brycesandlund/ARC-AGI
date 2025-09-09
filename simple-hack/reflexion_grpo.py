@@ -502,7 +502,7 @@ class GRPOTrainer:
             # Calculate reward distribution fractions
             fraction_all_zero_rewards = (all_zero_rewards_count / prompts_processed_count) if prompts_processed_count > 0 else 0
             fraction_all_one_rewards = (all_one_rewards_count / prompts_processed_count) if prompts_processed_count > 0 else 0
-            raw_rewards_mean = raw_rewards.mean().item() if raw_rewards else 0.0
+            raw_rewards_mean = torch.tensor(raw_rewards).mean().item() if raw_rewards else 0.0
 
             # Each item in processed_buffer corresponds to prompts_per_compute_loss prompts.
             # We calculate a step size to ensure `minibatch_size` correctly refers to the number of prompts.
