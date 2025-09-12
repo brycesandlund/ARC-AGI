@@ -183,7 +183,7 @@ class GRPOTrainer:
         log_ratio_ref = ref_logp - new_logp
         ratio_ref = torch.exp(log_ratio_ref)
         kl_losses = ratio_ref - log_ratio_ref - 1
-        return kl_losses
+        return kl_losses.sum()
 
     def _combine_experiences(self, experiences: List[Dict[str, torch.Tensor]]) -> Dict[str, torch.Tensor]:
         """Combines a list of experiences into a single batch for loss computation.
@@ -328,15 +328,15 @@ class GRPOTrainer:
         #     print(f"old_logp: {old_logp}")
         #     print(f"new_logp: {new_logp}")
 
-        kl_loss = self._kl_loss(new_logp, ref_logp)
-        loss = (pg_loss + self.kl_coef * kl_loss.sum()) / SEQUENCE_LENGTH_NORMALIZATION / float(rollouts_per_prompt)
+        kl_loss = self._kl_loss(ref_logp, new_logp)
+        loss = (pg_loss + self.kl_coef * kl_loss) / SEQUENCE_LENGTH_NORMALIZATION / float(rollouts_per_prompt)
 
         avg_response_length = loss_mask.sum().item() / loss_mask.shape[0]
 
         return {
             "loss": loss,
             "pg_loss": pg_loss.item(),
-            "kl_loss": kl_loss.mean().item(),
+            "kl_loss": kl_loss.item(),
             "clipped_fraction": clipped_fraction,
             "avg_response_length": avg_response_length,
             "model_entropy": mean_entropy,
@@ -519,6 +519,7 @@ class GRPOTrainer:
                     
                     minibatch_losses = []
                     minibatch_pg_losses = []
+                    minibatch_kl_losses = []
                     minibatch_kls = []
                     minibatch_clipped_fractions = []
                     minibatch_response_lengths = []
@@ -556,6 +557,7 @@ class GRPOTrainer:
                         # Store metrics for logging
                         minibatch_losses.append(loss.item())
                         minibatch_pg_losses.append(metrics['pg_loss'])
+                        minibatch_kl_losses.append(metrics['kl_loss'])
                         minibatch_kls.append(metrics['kl_loss'])
                         minibatch_clipped_fractions.append(metrics['clipped_fraction'])
                         minibatch_response_lengths.append(metrics['avg_response_length'])
@@ -609,6 +611,7 @@ class GRPOTrainer:
                     # Log aggregated metrics for the optimization step
                     avg_loss = sum(minibatch_losses) / len(minibatch_losses)
                     avg_pg_loss = sum(minibatch_pg_losses) / len(minibatch_pg_losses)
+                    avg_kl_loss = sum(minibatch_kl_losses) / len(minibatch_kl_losses)
                     avg_clipped_fraction = sum(minibatch_clipped_fractions) / len(minibatch_clipped_fractions)
                     avg_response_length = sum(minibatch_response_lengths) / len(minibatch_response_lengths)
                     avg_entropy = sum(minibatch_entropies) / len(minibatch_entropies)
@@ -632,6 +635,7 @@ class GRPOTrainer:
                         log_data = {
                             "train/loss": avg_loss,
                             "train/pg_loss": avg_pg_loss,
+                            "train/kl_loss": avg_kl_loss,
                             "train/kl_divergence": avg_kl,
                             "train/clipped_fraction": avg_clipped_fraction,
                             "train/avg_response_length": avg_response_length,
@@ -658,6 +662,8 @@ class GRPOTrainer:
                     print(
                         f"Optim Step {total_optim_steps:05d} | Collection Step {collection_step}/{collection_steps}, Epoch {epoch+1}/{epochs_per_batch}, MiniBatch {minibatch_num}/{total_minibatches} | "
                         f"loss: {avg_loss:.4f} | "
+                        f"pg_loss: {avg_pg_loss:.4f} | "
+                        f"kl_loss: {avg_kl_loss:.4f} | "
                         f"kl: {avg_kl:.4f} | "
                         f"clipped: {avg_clipped_fraction:.3f} | "
                         f"len: {avg_response_length:.1f} | "
