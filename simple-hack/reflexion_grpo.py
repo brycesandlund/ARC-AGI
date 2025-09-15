@@ -155,16 +155,29 @@ class GRPOTrainer:
         log_probs = F.log_softmax(logits, dim=-1)
         gathered_log_probs = log_probs.gather(-1, target_actions.unsqueeze(-1)).squeeze(-1)
 
-        print("--- Probs per Token ---")
-        for i in range(target_actions.shape[0]):
-            print(f"Sample {i}:")
-            for j in range(target_actions.shape[1]):
-                token_id = target_actions[i, j].item()
+        # # Get top 3 predicted tokens
+        # top_k_log_probs, top_k_indices = torch.topk(log_probs, 3, dim=-1)
+        # top_k_probs = torch.exp(top_k_log_probs)
+
+        # print("--- Probs per Token ---")
+        # for i in range(target_actions.shape[0]):
+        #     print(f"Sample {i}:")
+        #     for j in range(target_actions.shape[1]):
+        #         token_id = target_actions[i, j].item()
                 
-                prob = torch.exp(gathered_log_probs[i, j]).item()
-                token = tokenizer.decode(token_id)
-                print(f"  '{token}' ({token_id}): {prob:.4f}")
-        print("---")
+        #         prob = torch.exp(gathered_log_probs[i, j]).item()
+        #         token = tokenizer.decode(token_id)
+                
+        #         top_k_preds = []
+        #         for k in range(3):
+        #             pred_token_id = top_k_indices[i, j, k].item()
+        #             pred_prob = top_k_probs[i, j, k].item()
+        #             pred_token = tokenizer.decode(pred_token_id)
+        #             top_k_preds.append(f"'{pred_token}' ({pred_token_id}): {pred_prob:.4f}")
+                
+        #         top_k_str = ", ".join(top_k_preds)
+        #         print(f"  Actual: '{token}' ({token_id}): {prob:.4f} | Top 3: [{top_k_str}]")
+        # print("---")
         
         return gathered_log_probs
 
@@ -266,6 +279,21 @@ class GRPOTrainer:
             if isinstance(m, torch.nn.Dropout):
                 m.eval()
 
+    def _calculate_entropy(self, log_probs: torch.Tensor) -> float:
+        """
+        Calculates the mean entropy from a tensor of log probabilities.
+
+        Args:
+            log_probs (torch.Tensor): A tensor of log probabilities.
+
+        Returns:
+            float: The mean entropy.
+        """
+        with torch.no_grad():
+            entropy = -log_probs.detach()
+            mean_entropy = entropy.mean().item()
+        return mean_entropy
+
     def compute_loss(
         self,
         input_ids: torch.Tensor,
@@ -350,9 +378,7 @@ class GRPOTrainer:
         #     print("Debug - tokenizer not available for decoding")
 
         # Calculate model entropy over the generated tokens for logging
-        with torch.no_grad():
-            estimated_entropy = -new_logp.detach()
-            mean_entropy = estimated_entropy.mean().item()
+        mean_entropy = self._calculate_entropy(new_logp)
 
         # Compute loss components
         pg_loss, clipped_fraction = self._pg_loss(new_logp, old_logp, advantages)
