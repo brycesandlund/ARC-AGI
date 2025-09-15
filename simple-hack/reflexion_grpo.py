@@ -256,6 +256,7 @@ class GRPOTrainer:
         advantages_per_sequence: torch.Tensor,
         rollouts_per_prompt: int,
         is_first_step: bool = False,
+        tokenizer: Any = None,
     ) -> Dict[str, Any]:
         """Compute the loss for a batch, but do not perform an optimization step.
         This is used for gradient accumulation.
@@ -305,6 +306,22 @@ class GRPOTrainer:
         # New log-probabilities for gradient flow
         new_logp_full = self._compute_log_probs(self.model, input_ids)
         new_logp = new_logp_full[loss_mask] # Apply mask
+        
+        # Debug: Print new_logp and corresponding tokens
+        print(f"\nDebug - new_logp shape: {new_logp.shape}")
+        print(f"Debug - new_logp values: {new_logp}")
+        
+        # Get the tokens that correspond to new_logp (the predicted tokens)
+        predicted_tokens = input_ids[:, 1:][loss_mask]  # These are the target tokens being predicted
+        print(f"Debug - predicted tokens shape: {predicted_tokens.shape}")
+        # print(f"Debug - predicted token ids: {predicted_tokens}")
+        
+        # Decode the tokens to English
+        if tokenizer is not None:
+            decoded_tokens = [tokenizer.decode([token_id.item()]) for token_id in predicted_tokens]
+            print(f"Debug - decoded tokens: {decoded_tokens}")
+        else:
+            print("Debug - tokenizer not available for decoding")
 
         # Calculate model entropy over the generated tokens for logging
         with torch.no_grad():
@@ -327,6 +344,8 @@ class GRPOTrainer:
         #     print(f"First step - old_logp and new_logp do not agree:")
         #     print(f"old_logp: {old_logp}")
         #     print(f"new_logp: {new_logp}")
+
+
 
         kl_loss = self._kl_loss(ref_logp, new_logp)
         loss = (pg_loss + self.kl_coef * kl_loss) / SEQUENCE_LENGTH_NORMALIZATION / float(rollouts_per_prompt)
@@ -405,6 +424,7 @@ class GRPOTrainer:
             self.model.eval()
             micro_step = 0
             while (len(experience_buffer) < batch_size):
+                self.disable_dropout(self.model)
                 # Sample a fresh batch for each accumulation step
                 if use_revision:
                     sample_start_time = time.time()
@@ -544,6 +564,7 @@ class GRPOTrainer:
                             advantages_per_sequence=micro_batch_data['advantages'],
                             rollouts_per_prompt=rollouts_per_prompt,
                             is_first_step=is_first_gradient_step,
+                            tokenizer=tokenizer,
                         )
                         compute_loss_time = time.time() - compute_loss_start_time
                         print(f"    compute_loss took {compute_loss_time:.3f}s")
