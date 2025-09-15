@@ -126,12 +126,13 @@ class GRPOTrainer:
             self.grad_clip_norm = float('inf')
             print("Gradient clipping disabled")
 
-    def _compute_log_probs(self, model: torch.nn.Module, input_ids: torch.Tensor, disable_adapter: bool = False) -> torch.Tensor:
+    def _compute_log_probs(self, model: torch.nn.Module, input_ids: torch.Tensor, tokenizer: Any, disable_adapter: bool = False) -> torch.Tensor:
         """Computes log probabilities for a given model and input_ids.
 
         Args:
             model: The model to be used for computation.
             input_ids: The input tensor for the model of shape (batch_size, sequence_length).
+            tokenizer: The tokenizer for decoding tokens.
             disable_adapter: A boolean flag to disable the adapter if it exists.
         
         Returns:
@@ -154,15 +155,15 @@ class GRPOTrainer:
         log_probs = F.log_softmax(logits, dim=-1)
         gathered_log_probs = log_probs.gather(-1, target_actions.unsqueeze(-1)).squeeze(-1)
 
-        print("--- Log Probs per Token ---")
+        print("--- Probs per Token ---")
         for i in range(target_actions.shape[0]):
             print(f"Sample {i}:")
             for j in range(target_actions.shape[1]):
                 token_id = target_actions[i, j].item()
                 
-                log_prob = gathered_log_probs[i, j].item()
-                token = self.tokenizer.decode(token_id)
-                print(f"  '{token}' ({token_id}): {log_prob:.4f}")
+                prob = torch.exp(gathered_log_probs[i, j]).item()
+                token = tokenizer.decode(token_id)
+                print(f"  '{token}' ({token_id}): {prob:.4f}")
         print("---")
         
         return gathered_log_probs
@@ -305,6 +306,7 @@ class GRPOTrainer:
             ref_logp_full = self._compute_log_probs(
                 model=self.ref_model,
                 input_ids=input_ids,
+                tokenizer=tokenizer,
                 disable_adapter=True,
             )
             ref_logp = ref_logp_full[loss_mask]
@@ -321,7 +323,7 @@ class GRPOTrainer:
         advantages = torch.repeat_interleave(seq_advantages, token_counts_per_sequence)
         
         # New log-probabilities for gradient flow
-        new_logp_full = self._compute_log_probs(self.model, input_ids)
+        new_logp_full = self._compute_log_probs(self.model, input_ids, tokenizer=tokenizer)
         new_logp = new_logp_full[loss_mask] # Apply mask
         
         # # Debug: Print new_logp and corresponding tokens
@@ -340,7 +342,7 @@ class GRPOTrainer:
         # if tokenizer is not None:
         #     # Decode the entire sequence of tokens at once for an accurate representation
         #     # This avoids issues with decoding incomplete multi-token characters
-        #     readable_output = tokenizer.decode(predicted_tokens, skip_special_tokens=True, errors='replace')
+        #     readable_output = tokenizer.decode(predicted_tokens, skip_special_tokens=False, errors='replace')
         #     print("--- Decoded Tokens ---")
         #     print(readable_output)
         #     print("----------------------")
@@ -520,7 +522,7 @@ class GRPOTrainer:
                 combined_experience = self._combine_experiences(sublist)
                 
                 with torch.no_grad():
-                    old_logp_full = self._compute_log_probs(self.model, combined_experience['input_ids'])
+                    old_logp_full = self._compute_log_probs(self.model, combined_experience['input_ids'], tokenizer=tokenizer)
                     combined_experience['old_logp_full'] = old_logp_full.detach().to('cpu')
 
                 # test_combined_experience(combined_experience, prompts_per_compute_loss, rollouts_per_prompt)
