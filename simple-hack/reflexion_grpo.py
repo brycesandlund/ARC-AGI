@@ -152,7 +152,20 @@ class GRPOTrainer:
         
         logits = outputs.logits[:, :-1, :]
         log_probs = F.log_softmax(logits, dim=-1)
-        return log_probs.gather(-1, target_actions.unsqueeze(-1)).squeeze(-1)
+        gathered_log_probs = log_probs.gather(-1, target_actions.unsqueeze(-1)).squeeze(-1)
+
+        print("--- Log Probs per Token ---")
+        for i in range(target_actions.shape[0]):
+            print(f"Sample {i}:")
+            for j in range(target_actions.shape[1]):
+                token_id = target_actions[i, j].item()
+                
+                log_prob = gathered_log_probs[i, j].item()
+                token = self.tokenizer.decode(token_id)
+                print(f"  '{token}' ({token_id}): {log_prob:.4f}")
+        print("---")
+        
+        return gathered_log_probs
 
     def _pg_loss(
         self,
