@@ -596,7 +596,8 @@ class GRPOTrainer:
                         minibatch_entropies.append(metrics['model_entropy'])
                     
                     # Aggregate KL divergence from the minibatch
-                    avg_kl = sum(minibatch_kls) / len(minibatch_kls) if minibatch_kls else 0.0
+                    # We need to normalize by sequence length since we sum over tokens in GRPOTrainer._kl_loss.
+                    avg_kl = sum(minibatch_kls) / len(minibatch_kls) / SEQUENCE_LENGTH_NORMALIZATION if minibatch_kls else 0.0
 
                     # Check KL threshold before optimizer step
                     if avg_kl > kl_threshold:
@@ -892,10 +893,10 @@ def generate_and_decode(model, tokenizer, prompts, max_new_tokens, disable_adapt
         "input_ids": tokenized["input_ids"].to(model.device),
         "attention_mask": tokenized["attention_mask"].to(model.device),
         "max_new_tokens": max_new_tokens,
-        "temperature": 0.6,
+        "temperature": 1,
         "do_sample": True,
         "pad_token_id": PAD_TOKEN_ID,
-        "repetition_penalty": 1.1,
+        # "repetition_penalty": 1.1,
     }
     # Update with any additional kwargs
     base_gen_kwargs.update(gen_kwargs)
@@ -1157,7 +1158,7 @@ def main():
     parser.add_argument("--wandb_run_name", type=str, default="custom-grpo", help="W&B run name")
         
     # KL threshold configuration
-    parser.add_argument("--kl_threshold", type=float, default=10, help="KL divergence threshold for early stopping")
+    parser.add_argument("--kl_threshold", type=float, default=1000, help="KL divergence threshold for early stopping")
     
     # Revision configuration
     parser.add_argument("--use_revision", action="store_true", default=False, help="Use revision model to revise completions during sampling.")
