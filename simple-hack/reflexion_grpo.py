@@ -468,6 +468,7 @@ class GRPOTrainer:
             experience_buffer = leftover_experience
             leftover_experience = []
             raw_rewards = []
+            raw_entropy = []
             all_zero_rewards_count = 0
             all_one_rewards_count = 0
             prompts_processed_count = 0
@@ -533,7 +534,15 @@ class GRPOTrainer:
                     batch_reward_mean = rewards.mean().item()
                     training_rewards.extend(rewards.tolist())
                     raw_rewards.extend(rewards.tolist())
-                    print(f"  Collected micro-batch {micro_step+1}/projected {batch_size // prompts_per_generation} | reward: {batch_reward_mean:.3f}")
+
+                    # Calculate raw entropy for this micro-batch
+                    with torch.no_grad():
+                        old_logp_full = self._compute_log_probs(self.model, input_ids, tokenizer=tokenizer)
+                    masked_logp = old_logp_full[loss_mask]
+                    batch_entropy = self._calculate_entropy(masked_logp)
+                    raw_entropy.append(batch_entropy)
+
+                    print(f"  Collected micro-batch {micro_step+1}/projected {batch_size // prompts_per_generation} | reward: {batch_reward_mean:.3f} | entropy: {batch_entropy:.3f}")
                     micro_step += 1
 
             leftover_experience = experience_buffer[batch_size:]
@@ -575,6 +584,7 @@ class GRPOTrainer:
             fraction_all_zero_rewards = (all_zero_rewards_count / prompts_processed_count) if prompts_processed_count > 0 else 0
             fraction_all_one_rewards = (all_one_rewards_count / prompts_processed_count) if prompts_processed_count > 0 else 0
             raw_rewards_mean = torch.tensor(raw_rewards).mean().item() if raw_rewards else 0.0
+            raw_entropy_mean = torch.tensor(raw_entropy).mean().item() if raw_entropy else 0.0
 
             # Each item in processed_buffer corresponds to prompts_per_compute_loss prompts.
             # We calculate a step size to ensure `minibatch_size` correctly refers to the number of prompts.
@@ -725,6 +735,7 @@ class GRPOTrainer:
                             "train/fraction_all_zero_rewards": fraction_all_zero_rewards,
                             "train/fraction_all_one_rewards": fraction_all_one_rewards,
                             "train/raw_rewards_mean": raw_rewards_mean,
+                            "train/raw_entropy_mean": raw_entropy_mean,
                             "collection_step": collection_step,
                             "epoch_per_batch": epoch + 1,
                         }
@@ -744,6 +755,7 @@ class GRPOTrainer:
                         f"lr: {current_lr:.2e} | "
                         f"reward: {avg_reward_mean:.3f} (raw_batch: {raw_batch_reward_mean:.3f}, revised_batch: {revised_batch_reward_mean:.3f}) | "
                         f"raw_rewards_mean: {raw_rewards_mean:.3f} | "
+                        f"raw_entropy_mean: {raw_entropy_mean:.3f} | "
                         f"reward_std: {avg_reward_std:.3f} | "
                         f"unclipped_grad_norm: {unclipped_grad_norm:.4f} | "
                         f"success: {avg_success_rate:.1%} | "
