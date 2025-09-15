@@ -521,7 +521,8 @@ class GRPOTrainer:
                         if torch.all(rewards_chunks[i] == 1):
                             all_one_rewards_count += 1
 
-                        if (not torch.all(advantages_chunks[i] == 0)):
+                        # if (not torch.all(advantages_chunks[i] == 0)):
+                        if True:
                             experience_buffer.append({
                                 'input_ids': input_ids_chunks[i].to('cpu'), 
                                 'rewards': rewards_chunks[i].to('cpu'),
@@ -535,14 +536,15 @@ class GRPOTrainer:
                     training_rewards.extend(rewards.tolist())
                     raw_rewards.extend(rewards.tolist())
 
-                    # Calculate raw entropy for this micro-batch
-                    with torch.no_grad():
-                        old_logp_full = self._compute_log_probs(self.model, input_ids, tokenizer=tokenizer)
-                    masked_logp = old_logp_full[loss_mask]
-                    batch_entropy = self._calculate_entropy(masked_logp)
-                    raw_entropy.append(batch_entropy)
+                    # Unfortunately we run out of GPU memory doing this.
+                    # # Calculate raw entropy for this micro-batch
+                    # with torch.no_grad():
+                    #     old_logp_full = self._compute_log_probs(self.model, input_ids, tokenizer=tokenizer)
+                    # masked_logp = old_logp_full[loss_mask]
+                    # batch_entropy = self._calculate_entropy(masked_logp)
+                    # raw_entropy.append(batch_entropy)
 
-                    print(f"  Collected micro-batch {micro_step+1}/projected {batch_size // prompts_per_generation} | reward: {batch_reward_mean:.3f} | entropy: {batch_entropy:.3f}")
+                    print(f"  Collected micro-batch {micro_step+1}/projected {batch_size // prompts_per_generation} | reward: {batch_reward_mean:.3f}")# | entropy: {batch_entropy:.3f}")
                     micro_step += 1
 
             leftover_experience = experience_buffer[batch_size:]
