@@ -7,6 +7,10 @@ import time
 from typing import List, Dict, Any, Optional, Tuple
 import copy
 from enum import Enum
+import numpy as np
+
+# Force numpy to print full arrays
+np.set_printoptions(threshold=sys.maxsize)
 
 import torch
 from torch.nn import functional as F
@@ -176,13 +180,13 @@ class GRPOTrainer:
 
     def _kl_loss(
         self,
-        new_logp: torch.Tensor,
-        ref_logp: torch.Tensor,
+        p_logp: torch.Tensor,
+        q_logp: torch.Tensor,
     ) -> torch.Tensor:
-        """Computes the KL divergence loss against the reference model."""
-        log_ratio_ref = ref_logp - new_logp
-        ratio_ref = torch.exp(log_ratio_ref)
-        kl_losses = ratio_ref - log_ratio_ref - 1
+        """Computes the KL divergence loss of q compared to p."""
+        log_ratio = q_logp - p_logp
+        ratio = torch.exp(log_ratio)
+        kl_losses = ratio - 1 - log_ratio
         return kl_losses.sum()
 
     def _combine_experiences(self, experiences: List[Dict[str, torch.Tensor]]) -> Dict[str, torch.Tensor]:
@@ -307,21 +311,28 @@ class GRPOTrainer:
         new_logp_full = self._compute_log_probs(self.model, input_ids)
         new_logp = new_logp_full[loss_mask] # Apply mask
         
-        # Debug: Print new_logp and corresponding tokens
-        print(f"\nDebug - new_logp shape: {new_logp.shape}")
-        print(f"Debug - new_logp values: {new_logp}")
+        # # Debug: Print new_logp and corresponding tokens
+        # print(f"\nDebug - new_logp shape: {new_logp.shape}")
+        # print(f"Debug - new_logp values: {new_logp}")
         
-        # Get the tokens that correspond to new_logp (the predicted tokens)
-        predicted_tokens = input_ids[:, 1:][loss_mask]  # These are the target tokens being predicted
-        print(f"Debug - predicted tokens shape: {predicted_tokens.shape}")
-        # print(f"Debug - predicted token ids: {predicted_tokens}")
+        # # Get the tokens that correspond to new_logp (the predicted tokens)
+        # predicted_tokens = input_ids[:, 1:][loss_mask]  # These are the target tokens being predicted
+        # print(f"Debug - predicted tokens shape: {predicted_tokens.shape}")
+        # # print(f"Debug - predicted token ids: {predicted_tokens}")
         
-        # Decode the tokens to English
-        if tokenizer is not None:
-            decoded_tokens = [tokenizer.decode([token_id.item()]) for token_id in predicted_tokens]
-            print(f"Debug - decoded tokens: {decoded_tokens}")
-        else:
-            print("Debug - tokenizer not available for decoding")
+        # # Keep predicted_tokens as tensor and print with tensor functions
+        # # print(f"Debug - predicted tokens (tensor): {predicted_tokens}")
+        
+        # # Also decode the tokens to English for context
+        # if tokenizer is not None:
+        #     # Decode the entire sequence of tokens at once for an accurate representation
+        #     # This avoids issues with decoding incomplete multi-token characters
+        #     readable_output = tokenizer.decode(predicted_tokens, skip_special_tokens=True, errors='replace')
+        #     print("--- Decoded Tokens ---")
+        #     print(readable_output)
+        #     print("----------------------")
+        # else:
+        #     print("Debug - tokenizer not available for decoding")
 
         # Calculate model entropy over the generated tokens for logging
         with torch.no_grad():
@@ -347,7 +358,7 @@ class GRPOTrainer:
 
 
 
-        kl_loss = self._kl_loss(ref_logp, new_logp)
+        kl_loss = self._kl_loss(new_logp, ref_logp) # We have to use reverse KL or else sample from reference model.
         loss = (pg_loss + self.kl_coef * kl_loss) / SEQUENCE_LENGTH_NORMALIZATION / float(rollouts_per_prompt)
 
         avg_response_length = loss_mask.sum().item() / loss_mask.shape[0]
