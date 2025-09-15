@@ -424,7 +424,7 @@ class GRPOTrainer:
             self.model.eval()
             micro_step = 0
             while (len(experience_buffer) < batch_size):
-                self.disable_dropout(self.model)
+                self._disable_dropout(self.model)
                 # Sample a fresh batch for each accumulation step
                 if use_revision:
                     sample_start_time = time.time()
