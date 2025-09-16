@@ -20,11 +20,13 @@ from peft import LoraConfig, get_peft_model, PeftModel
 import wandb
 
 from datasets import Dataset
+from countdown import CountdownDataset
+from dataset import Dataset, ProblemInstance
 from enums import ModelType, DatasetType
 from dataclasses import dataclass
 
 # Import math problem generation and reward functions
-from functions import generate_math_problems, math_reward_func, parse_completion, ProblemInstance
+from functions import parse_completion
 from reflexion_grpo_tests import test_sample, debug_batch_and_actions, test_combined_experience
 
 @dataclass
@@ -416,6 +418,7 @@ class GRPOTrainer:
     def train(
         self,
         tokenizer: Any,
+        dataset: Dataset,
         collection_steps: int,
         batch_size: int,
         epochs_per_batch: int,
@@ -430,7 +433,6 @@ class GRPOTrainer:
         save_steps: int = 0,
         repo_id: Optional[str] = None,
         model_type: ModelType = ModelType.THINKING,
-        dataset: DatasetType = DatasetType.COUNTDOWN,
     ) -> Dict[str, Any]:
         """Train the model using GRPO.
         
@@ -449,7 +451,6 @@ class GRPOTrainer:
         save_steps : number of optimization steps between saving LoRA checkpoints
         repo_id : Hugging Face Hub repository ID to push checkpoints to.
         model_type : Type of model training.
-        dataset : Name of the dataset to use for generating problems.
         
         Returns
         -------
@@ -487,19 +488,19 @@ class GRPOTrainer:
                         model=self.model,
                         tokenizer=tokenizer,
                         revision_model=self.model,
+                        dataset=dataset,
                         rollouts_per_prompt=rollouts_per_prompt,
                         prompts_per_generation=prompts_per_generation,
                         max_new_tokens=max_new_tokens,
                         disable_adapter=False,
                         enable_thinking=False,
                         model_type=model_type,
-                        dataset=dataset,
                     )
                     sample_time = time.time() - sample_start_time
                     print(f"  sample_and_revise took {sample_time:.2f}s")
                 else:
                     sample_start_time = time.time()
-                    sample_output = sample(self.model, tokenizer, rollouts_per_prompt=rollouts_per_prompt, prompts_per_generation=prompts_per_generation, max_new_tokens=max_new_tokens, model_type=model_type, dataset=dataset)
+                    sample_output = sample(self.model, tokenizer, dataset, rollouts_per_prompt=rollouts_per_prompt, prompts_per_generation=prompts_per_generation, max_new_tokens=max_new_tokens, model_type=model_type)
                     sample_outputs = [sample_output]
                     sample_time = time.time() - sample_start_time
                     print(f"  sample took {sample_time:.2f}s")
@@ -991,13 +992,13 @@ def sample_and_revise(
     model, 
     tokenizer, 
     revision_model,
+    dataset: Dataset,
     rollouts_per_prompt: int, 
     prompts_per_generation: int,
     max_new_tokens: int, 
     disable_adapter: bool, 
     enable_thinking: bool,
     model_type: ModelType = ModelType.THINKING,
-    dataset: DatasetType = DatasetType.COUNTDOWN,
 ) -> List[SampleOutput]:
     """Samples, revises, and evaluates completions.
 
@@ -1031,7 +1032,7 @@ def sample_and_revise(
     # 1. First pass: Sample from the base model to get initial solutions
     print("First pass: Sampling from the base model to get initial solutions")
     initial_sample = sample(
-        model, tokenizer, rollouts_per_prompt, prompts_per_generation, max_new_tokens, model_type=model_type, dataset=dataset
+        model, tokenizer, dataset, rollouts_per_prompt, prompts_per_generation, max_new_tokens, model_type=model_type
     )
     initial_rewards = initial_sample.rewards
     problem_instances = initial_sample.problem_instances
@@ -1053,11 +1054,9 @@ Reward: {initial_rewards[i]}
 Your task is to revise the solution to output a correct expression in <answer></answer> tags and revise the output leading to the answer to include only and all tokens that are helpful to achieving the correct answer.
 """
         revision_prompts.append(revision_prompt)
-        revision_problem_instances.append(ProblemInstance(
-            prompt=revision_prompt,
-            target=problem_instances[i].target,
-            numbers=problem_instances[i].numbers
-        ))
+        revision_problem_instances.append(
+            ProblemInstance.from_instance(problem_instances[i], new_prompt=revision_prompt)
+        )
     
     print("Second pass: Constructing revision prompts and revising with the revision_model")
     # Generate revised completions
@@ -1079,7 +1078,7 @@ Your task is to revise the solution to output a correct expression in <answer></
         final_completions = revised_completions
     
     # Create the batch from prompts and generated completions
-    rewards = torch.tensor(math_reward_func(final_completions, revision_problem_instances, model_type=model_type), dtype=torch.float32)
+    rewards = torch.tensor(dataset.math_reward_func(final_completions, revision_problem_instances, model_type=model_type), dtype=torch.float32)
     advantages = compute_sequence_advantages(rewards, prompts_per_generation, rollouts_per_prompt)
     input_ids = revised_generated_ids
 
@@ -1096,7 +1095,7 @@ Your task is to revise the solution to output a correct expression in <answer></
     return [initial_sample, revised_sample_output]
 
 
-def sample(model, tokenizer, rollouts_per_prompt: int = 4, prompts_per_generation: int = 1, max_new_tokens: int = 512, model_type: ModelType = ModelType.THINKING, dataset: DatasetType = DatasetType.COUNTDOWN) -> SampleOutput:
+def sample(model, tokenizer, dataset: Dataset, rollouts_per_prompt: int = 4, prompts_per_generation: int = 1, max_new_tokens: int = 512, model_type: ModelType = ModelType.THINKING) -> SampleOutput:
     """Generate a batch of math problems and model completions for GRPO training.
 
     This function first generates a set of unique math problems, then duplicates them
@@ -1137,7 +1136,7 @@ def sample(model, tokenizer, rollouts_per_prompt: int = 4, prompts_per_generatio
     """
     
     # Generate `prompts_per_generation` unique math problems
-    problem_generator = generate_math_problems(tokenizer, prompts_per_generation, model_type=model_type, dataset=dataset)
+    problem_generator = dataset.generate_math_problems(prompts_per_generation, model_type=model_type)
     unique_problems = list(problem_generator)
     
     # Duplicate each problem `rollouts_per_prompt` times
@@ -1151,7 +1150,7 @@ def sample(model, tokenizer, rollouts_per_prompt: int = 4, prompts_per_generatio
     completions, generated_ids, loss_mask = generate_and_decode(model, tokenizer, prompts, max_new_tokens, enable_thinking=enable_thinking_flag, model_type=model_type)
     
     # Create the batch from prompts and generated completions
-    rewards = torch.tensor(math_reward_func(completions, problems, model_type=model_type), dtype=torch.float32)
+    rewards = torch.tensor(dataset.math_reward_func(completions, problems, model_type=model_type), dtype=torch.float32)
     advantages = compute_sequence_advantages(rewards, prompts_per_generation, rollouts_per_prompt)
     input_ids = generated_ids
 
@@ -1383,6 +1382,11 @@ def main():
     print(f"Total optimization steps: {total_optim_steps}")
     print(f"Data collection steps: {collection_steps} (total_optim_steps / epochs_per_batch)")
 
+    if args.dataset == DatasetType.COUNTDOWN:
+        dataset = CountdownDataset()
+    else:
+        raise ValueError(f"Unsupported dataset type: {args.dataset}")
+
     trainer = GRPOTrainer(
         model,
         ref_model=ref_model,
@@ -1405,6 +1409,7 @@ def main():
         # Run training using the new train method
         trainer.train(
             tokenizer=tokenizer,
+            dataset=dataset,
             collection_steps=collection_steps,
             batch_size=args.batch_size,
             epochs_per_batch=args.epochs_per_batch,
@@ -1419,26 +1424,9 @@ def main():
             save_steps=args.save_steps,
             repo_id=repo_id if args.use_lora else None,
             model_type=args.model_type,
-            dataset=args.dataset,
         )
 
         print("Training complete!")
-        
-        # # Save model (LoRA adapters if using LoRA, full model otherwise)
-        # if args.use_lora:
-        #     print("Saving final LoRA adapters locally...")
-        #     save_directory = f"./lora_adapters_grpo_math-{run_id}"
-        #     model.save_pretrained(save_directory)
-        #     print(f"LoRA adapters saved to {save_directory}")
-
-        #     print(f"Pushing final LoRA adapters to Hugging Face Hub: {repo_id}")
-        #     try:
-        #         model.push_to_hub(repo_id, commit_message="Final model checkpoint")
-        #         print(f"Successfully pushed to main branch of {repo_id}")
-        #     except Exception as e:
-        #         print(f"Failed to push final model to Hub: {e}")
-        # else:
-        #     print("To save full model, use: model.save_pretrained('./saved_model')")
         
     except Exception as e:
         print(f"\nTraining failed with exception: {e}")
