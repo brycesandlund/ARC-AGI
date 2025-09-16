@@ -39,7 +39,7 @@ class SampleOutput:
 # Global token IDs - initialized in main() after tokenizer is loaded
 PAD_TOKEN_ID = None
 EOS_TOKEN_ID = None
-SEQUENCE_LENGTH_NORMALIZATION = 1000.0
+SEQUENCE_LENGTH_NORMALIZATION = 250
 
 # Helper function for wandb cleanup
 def cleanup_wandb():

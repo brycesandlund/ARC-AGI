@@ -296,7 +296,8 @@ def generate_math_problems(tokenizer, dataset_size, model_type: ModelType, datas
             yield ProblemInstance(
                 prompt=prompt_content,
                 target=target,
-                numbers=numbers
+                numbers=numbers,
+                answer=""
             )
 
 def extract_numbers_from_expression(expression):
