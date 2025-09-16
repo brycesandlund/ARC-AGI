@@ -15,3 +15,10 @@ class EvaluationResult(Enum):
 
     def __str__(self):
         return self.value
+
+class DatasetType(Enum):
+    COUNTDOWN = "countdown"
+    GSM8K = "gsm8k"
+
+    def __str__(self):
+        return self.value

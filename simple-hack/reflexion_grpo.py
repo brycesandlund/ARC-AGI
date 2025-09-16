@@ -20,7 +20,7 @@ from peft import LoraConfig, get_peft_model, PeftModel
 import wandb
 
 from datasets import Dataset
-from enums import ModelType
+from enums import ModelType, DatasetType
 from dataclasses import dataclass
 
 # Import math problem generation and reward functions
@@ -430,6 +430,7 @@ class GRPOTrainer:
         save_steps: int = 0,
         repo_id: Optional[str] = None,
         model_type: ModelType = ModelType.THINKING,
+        dataset: DatasetType = DatasetType.COUNTDOWN,
     ) -> Dict[str, Any]:
         """Train the model using GRPO.
         
@@ -448,6 +449,7 @@ class GRPOTrainer:
         save_steps : number of optimization steps between saving LoRA checkpoints
         repo_id : Hugging Face Hub repository ID to push checkpoints to.
         model_type : Type of model training.
+        dataset : Name of the dataset to use for generating problems.
         
         Returns
         -------
@@ -491,12 +493,13 @@ class GRPOTrainer:
                         disable_adapter=False,
                         enable_thinking=False,
                         model_type=model_type,
+                        dataset=dataset,
                     )
                     sample_time = time.time() - sample_start_time
                     print(f"  sample_and_revise took {sample_time:.2f}s")
                 else:
                     sample_start_time = time.time()
-                    sample_output = sample(self.model, tokenizer, rollouts_per_prompt=rollouts_per_prompt, prompts_per_generation=prompts_per_generation, max_new_tokens=max_new_tokens, model_type=model_type)
+                    sample_output = sample(self.model, tokenizer, rollouts_per_prompt=rollouts_per_prompt, prompts_per_generation=prompts_per_generation, max_new_tokens=max_new_tokens, model_type=model_type, dataset=dataset)
                     sample_outputs = [sample_output]
                     sample_time = time.time() - sample_start_time
                     print(f"  sample took {sample_time:.2f}s")
@@ -994,6 +997,7 @@ def sample_and_revise(
     disable_adapter: bool, 
     enable_thinking: bool,
     model_type: ModelType = ModelType.THINKING,
+    dataset: DatasetType = DatasetType.COUNTDOWN,
 ) -> List[SampleOutput]:
     """Samples, revises, and evaluates completions.
 
@@ -1027,7 +1031,7 @@ def sample_and_revise(
     # 1. First pass: Sample from the base model to get initial solutions
     print("First pass: Sampling from the base model to get initial solutions")
     initial_sample = sample(
-        model, tokenizer, rollouts_per_prompt, prompts_per_generation, max_new_tokens, model_type=model_type
+        model, tokenizer, rollouts_per_prompt, prompts_per_generation, max_new_tokens, model_type=model_type, dataset=dataset
     )
     initial_rewards = initial_sample.rewards
     problem_instances = initial_sample.problem_instances
@@ -1092,7 +1096,7 @@ Your task is to revise the solution to output a correct expression in <answer></
     return [initial_sample, revised_sample_output]
 
 
-def sample(model, tokenizer, rollouts_per_prompt: int = 4, prompts_per_generation: int = 1, max_new_tokens: int = 512, model_type: ModelType = ModelType.THINKING) -> SampleOutput:
+def sample(model, tokenizer, rollouts_per_prompt: int = 4, prompts_per_generation: int = 1, max_new_tokens: int = 512, model_type: ModelType = ModelType.THINKING, dataset: DatasetType = DatasetType.COUNTDOWN) -> SampleOutput:
     """Generate a batch of math problems and model completions for GRPO training.
 
     This function first generates a set of unique math problems, then duplicates them
@@ -1133,7 +1137,7 @@ def sample(model, tokenizer, rollouts_per_prompt: int = 4, prompts_per_generatio
     """
     
     # Generate `prompts_per_generation` unique math problems
-    problem_generator = generate_math_problems(tokenizer, prompts_per_generation, model_type=model_type)
+    problem_generator = generate_math_problems(tokenizer, prompts_per_generation, model_type=model_type, dataset=dataset)
     unique_problems = list(problem_generator)
     
     # Duplicate each problem `rollouts_per_prompt` times
@@ -1211,6 +1215,13 @@ def main():
     parser.add_argument("--use_wandb", action="store_true", default=True, help="Use Weights & Biases for logging")
     parser.add_argument("--wandb_project", type=str, default="grpo-math-training", help="W&B project name")
     parser.add_argument("--wandb_run_name", type=str, default="custom-grpo", help="W&B run name")
+    parser.add_argument(
+        "--dataset",
+        type=DatasetType,
+        default=DatasetType.COUNTDOWN,
+        choices=list(DatasetType),
+        help="The dataset to use for training. Currently, only 'countdown' is supported.",
+    )
         
     # KL threshold configuration
     parser.add_argument("--kl_threshold", type=float, default=1000, help="KL divergence threshold for early stopping")
@@ -1408,6 +1419,7 @@ def main():
             save_steps=args.save_steps,
             repo_id=repo_id if args.use_lora else None,
             model_type=args.model_type,
+            dataset=args.dataset,
         )
 
         print("Training complete!")

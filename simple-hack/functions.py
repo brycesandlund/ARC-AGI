@@ -5,13 +5,14 @@ import random
 import re
 from typing import List, Dict, Any, Optional
 
-from enums import ModelType, EvaluationResult
+from enums import ModelType, EvaluationResult, DatasetType
 
 @dataclass
 class ProblemInstance:
     prompt: str
     target: int
     numbers: List[int]
+    answer: str
 
 ZERO_REWARD_LOG_FREQUENCY = 0.1
 ONE_REWARD_LOG_FREQUENCY = 0.2
@@ -190,10 +191,10 @@ def generate_problem(target, num_count=4, num_range=10):
     print(f"Warning: Could not generate valid problem for target {target} after {max_attempts} attempts")
     return None, None
 
-def generate_math_problems(tokenizer, dataset_size, model_type: ModelType):
+def generate_math_problems(tokenizer, dataset_size, model_type: ModelType, dataset: DatasetType = DatasetType.COUNTDOWN):
     """
-    Generator function that creates math problems using generate_problem.
-    Yields dictionary with 'prompt' containing the problem description, formatted with thinking template.
+    Generator function that creates math problems.
+    Yields ProblemInstance object.
     """
     
     for _ in range(dataset_size):
