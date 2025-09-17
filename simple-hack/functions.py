@@ -16,6 +16,12 @@ def parse_completion(completion: str, model_type: ModelType) -> tuple[str, str]:
         tuple[str, str]: A tuple of (thinking_content, final_content).
     """
     if model_type == ModelType.INSTRUCT:
+        if "####" in completion:
+            parts = completion.split("####", 1)
+            thinking_content = parts[0].strip()
+            content = parts[1].strip()
+            return thinking_content, content
+
         answer_start_tag = "<answer>"
         answer_end_tag = "</answer>"
 
