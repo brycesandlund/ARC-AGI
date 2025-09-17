@@ -181,7 +181,7 @@ class CountdownDataset(Dataset):
 
         for _ in range(dataset_size):
             target = random.randint(0, 50)
-            num_count = random.choice([3, 4])
+            num_count = random.choice([4])
             numbers, expression = self._generate_problem(target, num_count=num_count, num_range=10)
 
             if numbers and expression:  # Only yield if we successfully generated a problem
