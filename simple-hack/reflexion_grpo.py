@@ -1187,15 +1187,15 @@ def main():
         default="Qwen/Qwen3-1.7B",
         help="HuggingFace model identifier.",
     )
-    parser.add_argument("--lr", type=float, default=1e-5, help="Learning rate")
-    parser.add_argument("--steps", type=int, default=40, help="Total number of optimization steps.")
-    parser.add_argument("--rollouts_per_prompt", type=int, default=8, help="Number of rollouts per prompt.")
+    parser.add_argument("--lr", type=float, default=1e-6, help="Learning rate")
+    parser.add_argument("--steps", type=int, default=32768, help="Total number of optimization steps.")
+    parser.add_argument("--rollouts_per_prompt", type=int, default=1, help="Number of rollouts per prompt.")
     parser.add_argument("--prompts_per_generation", type=int, default=1, help="Number of unique prompts for each generation step.")
     parser.add_argument("--clip_ratio", type=float, default=0.2, help="PPO-style clip ratio")
-    parser.add_argument("--kl_coef", type=float, default=0.01, help="KL penalty coefficient")
-    parser.add_argument("--max_new_tokens", type=int, default=1200, help="Maximum new tokens to generate")
+    parser.add_argument("--kl_coef", type=float, default=0, help="KL penalty coefficient")
+    parser.add_argument("--max_new_tokens", type=int, default=256, help="Maximum new tokens to generate")
     parser.add_argument("--batch_size", type=int, default=1, help="Number of prompts to sample from for each optimization step.")
-    parser.add_argument("--epochs_per_batch", type=int, default=4, help="Number of optimization epochs to run on each collected batch of experience")
+    parser.add_argument("--epochs_per_batch", type=int, default=1, help="Number of optimization epochs to run on each collected batch of experience")
     parser.add_argument("--minibatch_size", type=int, default=1, help="Size of minibatches for optimization.")
     parser.add_argument("--prompts_per_compute_loss", type=int, default=1, help="Number of prompts to batch together for a single loss computation.")
     
@@ -1227,14 +1227,14 @@ def main():
     
     # Revision configuration
     parser.add_argument("--use_revision", action="store_true", default=False, help="Use revision model to revise completions during sampling.")
-    parser.add_argument("--model_type", type=ModelType, default=ModelType.THINKING, choices=list(ModelType), help="Type of model training.")
+    parser.add_argument("--model_type", type=ModelType, default=ModelType.INSTRUCT, choices=list(ModelType), help="Type of model training.")
     
     # Learning rate scheduler configuration
     parser.add_argument("--lr_schedule", action="store_true", default=True, help="Use linear learning rate decay")
     parser.add_argument("--min_lr_ratio", type=float, default=0.1, help="Minimum learning rate as ratio of initial LR (default: 0.1 = 10% of initial LR)")
     
     # Gradient clipping configuration
-    parser.add_argument("--grad_clip_norm", type=float, default=1.0, help="Gradient clipping norm. Set to 0 or negative to disable clipping")
+    parser.add_argument("--grad_clip_norm", type=float, default=1000, help="Gradient clipping norm. Set to 0 or negative to disable clipping")
     parser.add_argument("--save_steps", type=int, default=100, help="Number of optimization steps between saving LoRA checkpoints to Hugging Face Hub.")
 
     args = parser.parse_args()
