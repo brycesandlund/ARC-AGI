@@ -181,7 +181,7 @@ class CountdownDataset(Dataset):
 
         for _ in range(dataset_size):
             target = random.randint(0, 50)
-            num_count = random.choice([3, 4])
+            num_count = random.choice([4])
             numbers, expression = self._generate_problem(target, num_count=num_count, num_range=10)
 
             if numbers and expression:  # Only yield if we successfully generated a problem
@@ -199,9 +199,9 @@ class CountdownDataset(Dataset):
 
                 elif model_type == ModelType.INSTRUCT:
                     # INSTRUCT-TUNED PROMPT (no thinking):
-                    # prompt_content = f"Using the numbers {numbers_str} exactly once, create a mathematical expression using +, -, *, /, and/or () that equals {target}. Please reason step by step, and put your final expression in <answer></answer> tags, for example, <answer>4*5-4</answer>."
+                    prompt_content = f"Using the numbers {numbers_str} exactly once, create a mathematical expression using +, -, *, /, and/or () that equals {target}. Please reason step by step, and put your final expression in <answer></answer> tags, for example, <answer>4*5-4</answer>."
                     
-                    prompt_content = f"Using the numbers {numbers_str} exactly once, create a mathematical expression using +, -, *, /, and/or () that equals {target}. Please reason step by step, and put your final expression after #### with no additional text, for example, ####4*5-4."
+                    # prompt_content = f"Using the numbers {numbers_str} exactly once, create a mathematical expression using +, -, *, /, and/or () that equals {target}. Please reason step by step, and put your final expression after #### with no additional text, for example, ####4*5-4."
 
                 else:  # Catches ModelType.THINKING
                     # REASONING-TRAINED PROMPT:

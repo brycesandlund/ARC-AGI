@@ -154,8 +154,15 @@ class GRPOTrainer:
             outputs = model(input_ids, attention_mask=attention_mask)
         
         logits = outputs.logits[:, :-1, :]
-        log_probs = F.log_softmax(logits, dim=-1)
-        gathered_log_probs = log_probs.gather(-1, target_actions.unsqueeze(-1)).squeeze(-1)
+        
+        # The following is a memory-efficient way to compute the log probabilities
+        # for the target actions. It avoids creating a large intermediate tensor with
+        # log probabilities for the entire vocabulary.
+        # NOTE: This removes the `log_probs` variable, so the commented-out debugging
+        # code below will not work without modification.
+        target_logits = logits.gather(-1, target_actions.unsqueeze(-1)).squeeze(-1)
+        logsumexp_logits = torch.logsumexp(logits, dim=-1)
+        gathered_log_probs = target_logits - logsumexp_logits
 
         # # Get top 3 predicted tokens
         # top_k_log_probs, top_k_indices = torch.topk(log_probs, 3, dim=-1)
@@ -244,7 +251,7 @@ class GRPOTrainer:
         all_rewards = []
         all_advantages = []
         all_is_revision = []
-
+        all_old_logp_full = []
         for exp in experiences:
             input_ids = exp['input_ids']
             loss_mask = exp['loss_mask']
@@ -265,7 +272,7 @@ class GRPOTrainer:
             all_rewards.append(exp['rewards'])
             all_advantages.append(exp['advantages'])
             all_is_revision.append(exp['is_revision'])
-
+            all_old_logp_full.append(exp['old_logp_full'])
         # Concatenate all tensors along the batch dimension (dim=0)
         return {
             'input_ids': torch.cat(padded_input_ids, dim=0),
@@ -273,6 +280,7 @@ class GRPOTrainer:
             'rewards': torch.cat(all_rewards, dim=0),
             'advantages': torch.cat(all_advantages, dim=0),
             'is_revision': torch.cat(all_is_revision, dim=0),
+            'old_logp_full': torch.cat(all_old_logp_full, dim=0),
         }
 
     def _disable_dropout(self, model):
@@ -292,7 +300,7 @@ class GRPOTrainer:
             float: The mean entropy.
         """
         with torch.no_grad():
-            entropy = -log_probs.detach()
+            entropy = -log_probs
             mean_entropy = entropy.mean().item()
         return mean_entropy
 
@@ -511,11 +519,15 @@ class GRPOTrainer:
                     advantages = sample_output.advantages
                     loss_mask = sample_output.loss_mask
 
+                    with torch.no_grad():
+                        old_logp_full = self._compute_log_probs(self.model, input_ids, tokenizer=tokenizer)
+
                     # Split tensors
                     input_ids_chunks = torch.split(input_ids, rollouts_per_prompt)
                     rewards_chunks = torch.split(rewards, rollouts_per_prompt)
                     advantages_chunks = torch.split(advantages, rollouts_per_prompt)
                     loss_mask_chunks = torch.split(loss_mask, rollouts_per_prompt)
+                    old_logp_full_chunks = torch.split(old_logp_full, rollouts_per_prompt)
 
                     for i in range(prompts_per_generation):
                         # Track reward statistics per-prompt
@@ -533,6 +545,7 @@ class GRPOTrainer:
                                 'advantages': advantages_chunks[i].to('cpu'),
                                 'loss_mask': loss_mask_chunks[i].to('cpu'),
                                 'is_revision': torch.tensor([sample_idx > 0] * rollouts_per_prompt, dtype=torch.bool),
+                                'old_logp_full': old_logp_full_chunks[i].to('cpu'),
                             })
                     
                     # Track and log rewards from this collection micro-batch
@@ -562,9 +575,9 @@ class GRPOTrainer:
                 sublist = experience_buffer[i:i+prompts_per_compute_loss]
                 combined_experience = self._combine_experiences(sublist)
                 
-                with torch.no_grad():
-                    old_logp_full = self._compute_log_probs(self.model, combined_experience['input_ids'], tokenizer=tokenizer)
-                    combined_experience['old_logp_full'] = old_logp_full.detach().to('cpu')
+                # with torch.no_grad():
+                #     old_logp_full = self._compute_log_probs(self.model, combined_experience['input_ids'], tokenizer=tokenizer)
+                #     combined_experience['old_logp_full'] = old_logp_full.detach().to('cpu')
 
                 # test_combined_experience(combined_experience, prompts_per_compute_loss, rollouts_per_prompt)
                 
@@ -1184,12 +1197,12 @@ def main():
     parser.add_argument(
         "--model_name",
         type=str,
-        default="Qwen/Qwen3-1.7B",
+        default="Qwen/Qwen3-4B-Instruct-2507",
         help="HuggingFace model identifier.",
     )
     parser.add_argument("--lr", type=float, default=1e-6, help="Learning rate")
     parser.add_argument("--steps", type=int, default=32768, help="Total number of optimization steps.")
-    parser.add_argument("--rollouts_per_prompt", type=int, default=1, help="Number of rollouts per prompt.")
+    parser.add_argument("--rollouts_per_prompt", type=int, default=4, help="Number of rollouts per prompt.")
     parser.add_argument("--prompts_per_generation", type=int, default=1, help="Number of unique prompts for each generation step.")
     parser.add_argument("--clip_ratio", type=float, default=0.2, help="PPO-style clip ratio")
     parser.add_argument("--kl_coef", type=float, default=0, help="KL penalty coefficient")
@@ -1204,8 +1217,8 @@ def main():
     parser.add_argument("--lora_r", type=int, default=16, help="LoRA rank")
     parser.add_argument("--lora_alpha", type=int, default=32, help="LoRA alpha scaling parameter")
     parser.add_argument("--lora_dropout", type=float, default=0.0, help="LoRA dropout")
-    parser.add_argument("--lora_weights_name", type=str, default=None, help="HuggingFace repository ID for LoRA weights to load and continue training.")
-    parser.add_argument("--lora_revision", type=str, default="main", help="Git revision (branch, tag, or commit hash) of the LoRA weights to load.")
+    parser.add_argument("--lora_weights_name", type=str, default="bcsandlund/Qwen3-4B-Instruct-2507-grpo-math-lora-rvcnjrk5", help="HuggingFace repository ID for LoRA weights to load and continue training.")
+    parser.add_argument("--lora_revision", type=str, default="step-100", help="Git revision (branch, tag, or commit hash) of the LoRA weights to load.")
     
     # Memory optimization
     parser.add_argument("--gradient_checkpointing", action="store_true", default=True, help="Enable gradient checkpointing to save memory")
