@@ -200,12 +200,14 @@ class GRPOTrainer:
         advantages: torch.Tensor,
         gen_logp: Optional[torch.Tensor] = None,
         truncation_C: Optional[float] = None,
-    ) -> Tuple[torch.Tensor, float]:
+    ) -> Tuple[torch.Tensor, float, float]:
         """Computes the policy gradient loss component."""
         ratio = torch.exp(new_logp - old_logp)
+        r_sampler_avg = 0.0
         if gen_logp is not None and truncation_C is not None:
             with torch.no_grad():
                 r_sampler = torch.exp(old_logp - gen_logp)
+                r_sampler_avg = r_sampler.mean().item()
                 trunc_importance = torch.clamp(r_sampler, max=float(truncation_C))
         else:
             trunc_importance = 1.0
@@ -220,10 +222,10 @@ class GRPOTrainer:
             clipped_mask = (ratio < 1.0 - self.clip_ratio) | (ratio > 1.0 + self.clip_ratio)
             clipped_fraction = clipped_mask.float().mean().item()
             
-            return pg_losses.sum(), clipped_fraction
+            return pg_losses.sum(), clipped_fraction, r_sampler_avg
         else:
             unclipped_losses = -(ratio * trunc_importance * advantages)
-            return unclipped_losses.sum(), clipped_fraction
+            return unclipped_losses.sum(), clipped_fraction, r_sampler_avg
 
     def _kl_loss(
         self,
@@ -415,7 +417,7 @@ class GRPOTrainer:
         mean_entropy = self._calculate_entropy(new_logp)
 
         # Compute loss components using existing PPO-style helper (with truncation)
-        pg_loss, clipped_fraction = self._pg_loss(new_logp, old_logp, advantages, gen_logp=gen_logp, truncation_C=C)
+        pg_loss, clipped_fraction, r_sampler_avg = self._pg_loss(new_logp, old_logp, advantages, gen_logp=gen_logp, truncation_C=C)
 
         # # Debug: Check if new_logp equals ref_logp
         # logp_equal = torch.allclose(new_logp, ref_logp, atol=1e-6)
@@ -445,6 +447,7 @@ class GRPOTrainer:
             "clipped_fraction": clipped_fraction,
             "avg_response_length": avg_response_length,
             "model_entropy": mean_entropy,
+            "r_sampler_avg": r_sampler_avg,
         }
 
     def train(
@@ -651,6 +654,7 @@ class GRPOTrainer:
                     minibatch_clipped_fractions = []
                     minibatch_response_lengths = []
                     minibatch_entropies = []
+                    minibatch_r_sampler_avgs = []
 
                     # Iterate over the collected experience in the minibatch
                     for micro_batch_data in minibatch:
@@ -692,6 +696,7 @@ class GRPOTrainer:
                         minibatch_clipped_fractions.append(metrics['clipped_fraction'])
                         minibatch_response_lengths.append(metrics['avg_response_length'])
                         minibatch_entropies.append(metrics['model_entropy'])
+                        minibatch_r_sampler_avgs.append(metrics['r_sampler_avg'])
                     
                     # Aggregate KL divergence from the minibatch
                     # We need to normalize by sequence length since we sum over tokens in GRPOTrainer._kl_loss.
@@ -746,6 +751,7 @@ class GRPOTrainer:
                     avg_clipped_fraction = sum(minibatch_clipped_fractions) / len(minibatch_clipped_fractions)
                     avg_response_length = sum(minibatch_response_lengths) / len(minibatch_response_lengths)
                     avg_entropy = sum(minibatch_entropies) / len(minibatch_entropies)
+                    avg_r_sampler = sum(minibatch_r_sampler_avgs) / len(minibatch_r_sampler_avgs) if minibatch_r_sampler_avgs else 0.0
                     
                     # Compute reward metrics from the current minibatch
                     minibatch_rewards = torch.cat([data['rewards'] for data in minibatch])
@@ -783,6 +789,7 @@ class GRPOTrainer:
                             "train/fraction_all_one_rewards": fraction_all_one_rewards,
                             "train/raw_rewards_mean": raw_rewards_mean,
                             "train/raw_entropy_mean": raw_entropy_mean,
+                            "train/r_sampler_avg": avg_r_sampler,
                             "collection_step": collection_step,
                             "epoch_per_batch": epoch + 1,
                         }
@@ -808,7 +815,8 @@ class GRPOTrainer:
                         f"success: {avg_success_rate:.1%} | "
                         f"zeros: {all_zero_rewards_count}/{prompts_processed_count} | "
                         f"ones: {all_one_rewards_count}/{prompts_processed_count} | "
-                        f"entropy: {avg_entropy:.4f}"
+                        f"entropy: {avg_entropy:.4f} | "
+                        f"r_sampler: {avg_r_sampler:.4f}"
                     )
                 
                 if kl_exceeded:
