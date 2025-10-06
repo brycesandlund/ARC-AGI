@@ -35,6 +35,7 @@ class SampleOutput:
     rewards: torch.Tensor
     advantages: torch.Tensor
     loss_mask: torch.Tensor
+    gen_logp: torch.Tensor
     completions: List[str]
     problem_instances: List[ProblemInstance]
 
@@ -252,9 +253,11 @@ class GRPOTrainer:
         all_advantages = []
         all_is_revision = []
         all_old_logp_full = []
+        all_gen_logp = []
         for exp in experiences:
             input_ids = exp['input_ids']
             loss_mask = exp['loss_mask']
+            gen_logp = exp['gen_logp']
             
             # Amount of padding needed for this experience's tensors
             padding_len = max_len - input_ids.shape[1]
@@ -267,6 +270,9 @@ class GRPOTrainer:
             # The mask is shorter by 1 in the sequence dimension.
             padded_mask = F.pad(loss_mask, (0, padding_len), 'constant', False)
             padded_loss_masks.append(padded_mask)
+            
+            # Keep gen_logp at its original length; no padding here.
+            all_gen_logp.append(gen_logp)
 
             # These tensors do not have a sequence length dimension to pad, so just append
             all_rewards.append(exp['rewards'])
@@ -277,6 +283,7 @@ class GRPOTrainer:
         return {
             'input_ids': torch.cat(padded_input_ids, dim=0),
             'loss_mask': torch.cat(padded_loss_masks, dim=0),
+            'gen_logp': torch.cat(all_gen_logp, dim=0),
             'rewards': torch.cat(all_rewards, dim=0),
             'advantages': torch.cat(all_advantages, dim=0),
             'is_revision': torch.cat(all_is_revision, dim=0),
@@ -519,15 +526,16 @@ class GRPOTrainer:
                     advantages = sample_output.advantages
                     loss_mask = sample_output.loss_mask
 
-                    with torch.no_grad():
-                        old_logp_full = self._compute_log_probs(self.model, input_ids, tokenizer=tokenizer)
+                    # with torch.no_grad():
+                    #     old_logp_full = self._compute_log_probs(self.model, input_ids, tokenizer=tokenizer)
 
                     # Split tensors
                     input_ids_chunks = torch.split(input_ids, rollouts_per_prompt)
                     rewards_chunks = torch.split(rewards, rollouts_per_prompt)
                     advantages_chunks = torch.split(advantages, rollouts_per_prompt)
                     loss_mask_chunks = torch.split(loss_mask, rollouts_per_prompt)
-                    old_logp_full_chunks = torch.split(old_logp_full, rollouts_per_prompt)
+                    gen_logp_chunks = torch.split(sample_output.gen_logp, rollouts_per_prompt)
+                    # old_logp_full_chunks = torch.split(old_logp_full, rollouts_per_prompt)
 
                     for i in range(prompts_per_generation):
                         # Track reward statistics per-prompt
@@ -544,8 +552,9 @@ class GRPOTrainer:
                                 'rewards': rewards_chunks[i].to('cpu'),
                                 'advantages': advantages_chunks[i].to('cpu'),
                                 'loss_mask': loss_mask_chunks[i].to('cpu'),
+                                'gen_logp': gen_logp_chunks[i].to('cpu'),
                                 'is_revision': torch.tensor([sample_idx > 0] * rollouts_per_prompt, dtype=torch.bool),
-                                'old_logp_full': old_logp_full_chunks[i].to('cpu'),
+                                # 'old_logp_full': old_logp_full_chunks[i].to('cpu'),
                             })
                     
                     # Track and log rewards from this collection micro-batch
@@ -575,9 +584,9 @@ class GRPOTrainer:
                 sublist = experience_buffer[i:i+prompts_per_compute_loss]
                 combined_experience = self._combine_experiences(sublist)
                 
-                # with torch.no_grad():
-                #     old_logp_full = self._compute_log_probs(self.model, combined_experience['input_ids'], tokenizer=tokenizer)
-                #     combined_experience['old_logp_full'] = old_logp_full.detach().to('cpu')
+                with torch.no_grad():
+                    old_logp_full = self._compute_log_probs(self.model, combined_experience['input_ids'], tokenizer=tokenizer)
+                    combined_experience['old_logp_full'] = old_logp_full.detach().to('cpu')
 
                 # test_combined_experience(combined_experience, prompts_per_compute_loss, rollouts_per_prompt)
                 
@@ -802,7 +811,12 @@ class GRPOTrainer:
 def generate_with_cache(model, **kwargs):
     """
     Temporarily disables gradient checkpointing and enables caching for faster generation.
+    Always returns a tuple of (generated_ids, transition_logprobs) where
+    transition_logprobs are per-token log-probabilities for the generated tokens.
     """
+    # Ensure generation returns scores and a dict so we can compute log-probs
+    kwargs["output_scores"] = True
+    kwargs["return_dict_in_generate"] = True
     # Store original states
     was_gradient_checkpointing = model.is_gradient_checkpointing
     original_use_cache = model.config.use_cache
@@ -814,14 +828,20 @@ def generate_with_cache(model, **kwargs):
 
     # Generate
     with torch.inference_mode():
-        generated_ids = model.generate(**kwargs)
+        output = model.generate(**kwargs)
 
     # Restore original states
     model.config.use_cache = original_use_cache
     if was_gradient_checkpointing:
         model.gradient_checkpointing_enable()
 
-    return generated_ids
+    # Compute per-token transition log-probabilities for generated tokens
+    # output.scores is a list of length generated_len with tensors (batch*v, vocab)
+    transition_logprobs = model.compute_transition_scores(
+        output.sequences, output.scores, normalize_logits=True
+    )
+
+    return output.sequences, transition_logprobs
 
 
 def _extract_completions_and_create_loss_mask(tokenizer, generated_ids: torch.Tensor, input_ids: torch.Tensor) -> Tuple[List[str], torch.Tensor]:
@@ -917,15 +937,12 @@ def generate_and_decode(model, tokenizer, prompts, max_new_tokens, disable_adapt
 
     Returns
     -------
-    Tuple[List[str], torch.Tensor, torch.Tensor]
-        - completions (List[str]): Decoded completions for each prompt with special
-          tokens removed. Length equals `len(prompts)`.
-        - generated_ids (torch.Tensor): Token IDs for the full sequences
-          (prompt + completion), left-padded to a common length. Shape:
-          `(batch_size, seq_len)`.
-        - loss_mask (torch.Tensor): A boolean mask that is `True` only for the
-          generated (completion) tokens.
-          Shape: `(batch_size, seq_len - 1)`.
+    Tuple[List[str], torch.Tensor, torch.Tensor, torch.Tensor]
+        - completions (List[str])
+        - generated_ids (torch.Tensor)
+        - loss_mask (torch.Tensor)
+        - gen_logp (torch.Tensor): Per-token log-probabilities for generated tokens.
+          Shape: `(batch_size * num_return_sequences, generated_len)`.
     """
     
     if model_type == ModelType.BASE:
@@ -976,9 +993,9 @@ def generate_and_decode(model, tokenizer, prompts, max_new_tokens, disable_adapt
     # Handle adapter disabling for PEFT models
     if disable_adapter and hasattr(model, "disable_adapter"):
         with model.disable_adapter():  # type: ignore[attr-defined]
-            generated_ids = generate_with_cache(model, **base_gen_kwargs)
+            generated_ids, gen_logp = generate_with_cache(model, **base_gen_kwargs)
     else:
-        generated_ids = generate_with_cache(model, **base_gen_kwargs)
+        generated_ids, gen_logp = generate_with_cache(model, **base_gen_kwargs)
 
     # Debug: Check for padding and EOS tokens in generated sequences
     is_pad_tensor = (generated_ids == PAD_TOKEN_ID)
@@ -997,8 +1014,8 @@ def generate_and_decode(model, tokenizer, prompts, max_new_tokens, disable_adapt
     # Extract, decode, and return completions using token-based slicing.
     completions, loss_mask = _extract_completions_and_create_loss_mask(tokenizer, generated_ids, tokenized["input_ids"])
     
-    # Return text completions, full generated sequence, and the loss mask
-    return completions, generated_ids, loss_mask
+    # Return text completions, full generated sequence, the loss mask, and per-token gen log-probs
+    return completions, generated_ids, loss_mask, gen_logp
 
 
 def sample_and_revise(
@@ -1073,7 +1090,7 @@ Your task is to revise the solution to output a correct expression in <answer></
     
     print("Second pass: Constructing revision prompts and revising with the revision_model")
     # Generate revised completions
-    revised_completions, revised_generated_ids, loss_mask = generate_and_decode(
+    revised_completions, revised_generated_ids, loss_mask, gen_logp = generate_and_decode(
         revision_model,
         tokenizer,
         revision_prompts,
@@ -1102,6 +1119,7 @@ Your task is to revise the solution to output a correct expression in <answer></
         rewards=rewards,
         advantages=advantages,
         loss_mask=loss_mask,
+        gen_logp=gen_logp,
         completions=final_completions,
         problem_instances=revision_problem_instances
     )
@@ -1160,7 +1178,7 @@ def sample(model, tokenizer, dataset: Dataset, rollouts_per_prompt: int = 4, pro
 
     # Generate completions using the model
     enable_thinking_flag = model_type == ModelType.THINKING
-    completions, generated_ids, loss_mask = generate_and_decode(model, tokenizer, prompts, max_new_tokens, enable_thinking=enable_thinking_flag, model_type=model_type)
+    completions, generated_ids, loss_mask, gen_logp = generate_and_decode(model, tokenizer, prompts, max_new_tokens, enable_thinking=enable_thinking_flag, model_type=model_type)
     
     # Create the batch from prompts and generated completions
     rewards = torch.tensor(dataset.math_reward_func(completions, problems, model_type=model_type), dtype=torch.float32)
@@ -1175,6 +1193,7 @@ def sample(model, tokenizer, dataset: Dataset, rollouts_per_prompt: int = 4, pro
         rewards=rewards,
         advantages=advantages,
         loss_mask=loss_mask,
+        gen_logp=gen_logp,
         completions=completions,
         problem_instances=problems,
     )
