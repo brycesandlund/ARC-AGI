@@ -264,7 +264,7 @@ class GRPOTrainer:
         all_rewards = []
         all_advantages = []
         all_is_revision = []
-        all_old_logp_full = []
+        # all_old_logp_full = []
         all_gen_logp_padded = []
         for exp in experiences:
             input_ids = exp['input_ids']
@@ -290,7 +290,7 @@ class GRPOTrainer:
             all_rewards.append(exp['rewards'])
             all_advantages.append(exp['advantages'])
             all_is_revision.append(exp['is_revision'])
-            all_old_logp_full.append(exp['old_logp_full'])
+            # all_old_logp_full.append(exp['old_logp_full'])
         # Concatenate all tensors along the batch dimension (dim=0)
         return {
             'input_ids': torch.cat(padded_input_ids, dim=0),
@@ -299,7 +299,7 @@ class GRPOTrainer:
             'rewards': torch.cat(all_rewards, dim=0),
             'advantages': torch.cat(all_advantages, dim=0),
             'is_revision': torch.cat(all_is_revision, dim=0),
-            'old_logp_full': torch.cat(all_old_logp_full, dim=0),
+            # 'old_logp_full': torch.cat(all_old_logp_full, dim=0),
         }
 
     def _disable_dropout(self, model):
