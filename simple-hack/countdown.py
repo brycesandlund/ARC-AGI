@@ -201,7 +201,8 @@ class CountdownDataset(Dataset):
                     # INSTRUCT-TUNED PROMPT (no thinking):
                     prompt_content = f"Using the numbers {numbers_str} exactly once, create a mathematical expression using +, -, *, /, and/or () that equals {target}. Please reason step by step, and put your final expression in <answer></answer> tags, for example, <answer>4*5-4</answer>."
 
-                    if random.random() < 0.5:
+                    r = random.random()
+                    if r < 0.7:
                         prompt_content = "This is a longer prompt. " + prompt_content
                     
                     # prompt_content = f"Using the numbers {numbers_str} exactly once, create a mathematical expression using +, -, *, /, and/or () that equals {target}. Please reason step by step, and put your final expression after #### with no additional text, for example, ####4*5-4."

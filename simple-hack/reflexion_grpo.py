@@ -885,6 +885,10 @@ def _extract_completions_and_create_loss_mask(tokenizer, generated_ids: torch.Te
     # Decode the completion tokens, skipping special tokens.
     completions = tokenizer.batch_decode(completion_ids, skip_special_tokens=True)
 
+    completions_with_special_tokens = tokenizer.batch_decode(completion_ids, skip_special_tokens=False)
+    generated_ids_with_special_tokens = tokenizer.batch_decode(generated_ids, skip_special_tokens=False)
+    input_ids_with_special_tokens = tokenizer.batch_decode(input_ids, skip_special_tokens=False)
+
     # Create the loss mask.
     prompt_len = input_ids.shape[1]
     seq_len = generated_ids.shape[1]
